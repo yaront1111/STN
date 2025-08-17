@@ -1,1 +1,41 @@
+# Build directories
 build/
+cmake-build-*/
+*.build/
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Compiled files
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+
+# Data files (can be regenerated)
+data/*.csv
+
+# Logs
+*.log
