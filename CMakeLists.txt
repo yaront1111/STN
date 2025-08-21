@@ -10,6 +10,7 @@ add_executable(stn_demo
   cpp/core/ekf.h    cpp/core/ekf.cpp
   cpp/core/gravity_model.h cpp/core/gravity_model.cpp
   cpp/core/terrain_provider.h cpp/core/terrain_provider.cpp
+  cpp/core/radalt_sampler.h cpp/core/radalt_sampler.cpp
 )
 target_include_directories(stn_demo PRIVATE cpp/core)
 target_link_libraries(stn_demo PRIVATE Eigen3::Eigen)
