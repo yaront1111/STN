@@ -54,8 +54,6 @@ int main(int argc, char** argv) {
 
   // Config (v0.1 constants)
   const double dt = 0.01;
-  const double lat_rad = 32.0 * M_PI/180.0;  // pick a reasonable latitude
-  const double FREE_AIR = 3.086e-6;          // m/s^2 per meter (gravity decreases with altitude)
 
   State x; StrapdownINS ins({dt, 9.80665}); EKF ekf;
   
@@ -78,7 +76,7 @@ int main(int argc, char** argv) {
   constexpr bool USE_ADAPTIVE_TRN = true;  // Use adaptive TRN with Huber
   constexpr bool USE_SCALAR_AGL = false;  // Legacy scalar AGL update
   // Time-based TRN scheduling with accumulator (no missed ticks)
-  const double trn_rate_hz = 15.0;  // 15 Hz for Grade A stability target
+  const double trn_rate_hz = 12.0;  // 12 Hz for better stability
   const double trn_period = 1.0 / trn_rate_hz;
   double next_trn_t = rows[0].t + trn_period;  // Start from first IMU time
   int trn_fired = 0;
@@ -90,9 +88,9 @@ int main(int argc, char** argv) {
   TrnAdaptiveCfg trn_cfg;
   trn_cfg.sigma_agl = 0.75;      // Slightly looser for stability
   trn_cfg.nis_gate = 9.21;       // 97.5% gate
-  trn_cfg.slope_thresh = 0.035;  // 3.5% grade minimum - maximize acceptance
-  trn_cfg.alpha_base = 0.15;     // Ultra conservative with 15Hz
-  trn_cfg.alpha_boost = 1.3;     // Gentle boost on slopes
+  trn_cfg.slope_thresh = 0.03;   // 3% grade minimum - accept more for stability
+  trn_cfg.alpha_base = 0.2;      // Conservative with 12Hz
+  trn_cfg.alpha_boost = 1.35;    // Gentle boost on slopes
   trn_cfg.huber_c = 1.8;         // Less aggressive outlier rejection
   trn_cfg.max_step = 0.35;       // Conservative step limit
   
@@ -105,14 +103,12 @@ int main(int argc, char** argv) {
   double t_agl_prev = 0.0;
   bool has_prev_agl = false;
   
-  // Filters for smooth residuals
-  IIR1 filt_g_obs_z;  filt_g_obs_z.alpha = dt/2.0;  // tau≈2s
-  IIR1 filt_g_pred_z; filt_g_pred_z.alpha = dt/2.0;
+  // Gravity update filter and counter
+  IIR1 f_N_z_filt;
+  f_N_z_filt.alpha = 0.01;  // Time constant ~1 second for strong smoothing
+  int grav_update_counter = 0;
   
   std::ofstream fo(out); fo<<"t,pn,pe,pd,vn,ve,vd\n";
-
-  // Keep previous velocity for finite-difference acceleration
-  Eigen::Vector3d v_prev = x.v_NED;
 
   for(const auto& r: rows){
     // IMU packet
@@ -121,42 +117,17 @@ int main(int argc, char** argv) {
     // Propagate strapdown (updates attitude, velocity, position)
     ins.propagate(x, z);
 
-    // --- Gravity likelihood (vertical, gated + filtered + 1 Hz) ---
-    static constexpr bool USE_GRAVITY_LIKELIHOOD = false;  // Keep OFF by default (enable when needed)
+    // --- NEW: Active Gravity-Likelihood Update ---
+    // Rotate current accel into NED frame
+    Eigen::Vector3d f_N = x.q_BN * z.acc_mps2;
+    // Smooth the vertical component with heavy filtering
+    f_N_z_filt.step(f_N.z());
     
-    Eigen::Vector3d z_pos = x.p_NED;
-    Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
-    R(0,0) = 1e12; R(1,1) = 1e12; R(2,2) = 1e12; // default: ignore (no-op)
-    
-    static int decim = 0; 
-    const int DECIM = int(1.0/dt); // 1 Hz update rate
-    
-    // Recompute specific force in NED with current attitude
-    Eigen::Vector3d f_N = x.q_BN * (z.acc_mps2 - x.b_a);
-    double fmag = f_N.norm();
-    double gyro_norm = (z.gyro_rps - x.b_g).norm();
-    
-    // Predicted gravity at (lat, alt)
-    double alt_m = -x.p_NED.z();
-    GravityResult gr = GravityModel::normal({lat_rad, alt_m});
-    
-    // Observed gravity (accel) in NED ~ -specific_force when a≈0
-    double g_obs_z_raw = -f_N.z();
-    double g_pred_z_raw = gr.g_NED.z();
-    double g_obs_z = filt_g_obs_z.step(g_obs_z_raw);
-    double g_pred_z = filt_g_pred_z.step(g_pred_z_raw);
-    double r_down = g_obs_z - g_pred_z; // m/s^2
-    
-    // Gating: quasi-static only
-    bool quasi_static = (std::abs(fmag - gr.g_mps2) < 0.05) && (gyro_norm < 0.01);
-    const double gate_mps2 = 0.05; // residual gate
-    
-    if (USE_GRAVITY_LIKELIHOOD && quasi_static && std::abs(r_down) < gate_mps2 && (++decim % DECIM) == 0) {
-      double dz_est = (g_pred_z - g_obs_z) / FREE_AIR; // altitude correction (m)
-      dz_est = std::clamp(dz_est, -0.5, 0.5); // at most 0.5 m per update
-      z_pos.z() = x.p_NED.z() - dz_est;  // NED: down = -alt
-      R(2,2) = 100.0; // cautious weight
+    // Call gravity update periodically (2 Hz for stable vertical constraint)
+    if (++grav_update_counter % 50 == 0) {  // 100Hz/50 = 2Hz
+      ekf.update_gravity(x, f_N_z_filt);
     }
+
     
     // --- TRN update using precise time-based scheduler ---
     bool do_trn = false;
@@ -327,9 +298,8 @@ int main(int argc, char** argv) {
       ekf.set_P_pos(P_pos);
     }
     
-    // EKF propagate (cov) + position update
+    // EKF propagate (cov only)
     ekf.propagate(x, dt);
-    ekf.update_position(x, z_pos, R);
 
     // Log
     fo<<x.t<<","<<x.p_NED.x()<<","<<x.p_NED.y()<<","<<x.p_NED.z()<<","

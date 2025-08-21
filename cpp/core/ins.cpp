@@ -19,10 +19,12 @@ void StrapdownINS::propagate(State& x, const ImuSample& z) {
   // Transform specific force to NED
   Vector3d f_N = x.q_BN * f_b;
 
-  // Gravity in NED (down +Z)
+  // Gravity in NED (down is +Z)
   Vector3d g_N(0, 0, P.g);
 
-  // Integrate v and p (specific force + gravity)
+  // CORRECT PHYSICS: Accelerometer measures specific force (f = a - g)
+  // To get true acceleration: a = f + g
+  // In level flight: f = [0,0,-g], so a = f + g = [0,0,0] (no acceleration)
   x.v_NED += (f_N + g_N) * dt;
   x.p_NED += x.v_NED * dt;
   x.t += dt;

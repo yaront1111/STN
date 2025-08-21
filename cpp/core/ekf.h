@@ -1,5 +1,6 @@
 #pragma once
 #include "types.h"
+#include "filters.h"
 
 class EKF {
 public:
@@ -7,6 +8,7 @@ public:
   void propagate(State& x, double dt);
   void update_position(State& x, const Eigen::Vector3d& z_pos_NED, const Eigen::Matrix3d& R);
   bool update_agl(State& x, double z_agl, double terrain_h, const Eigen::Vector2d& terrain_grad);
+  void update_gravity(State& x, const IIR1& f_N_z);  // New gravity update method
   
   // Accessors for adaptive TRN
   Eigen::Matrix3d get_P_pos() const { return P_pos_; }
@@ -15,4 +17,5 @@ private:
   bool inited_ = false;
   Eigen::Matrix<double, 15, 15> P_;
   Eigen::Matrix3d P_pos_ = Eigen::Matrix3d::Identity() * 100.0;  // Large initial uncertainty
+  IIR1 g_obs_filt_;  // Low-pass filter for gravity observation
 };

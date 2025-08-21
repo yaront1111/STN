@@ -1,4 +1,5 @@
 #include "ekf.h"
+#include "gravity_model.h"
 using Eigen::Matrix3d; using Eigen::Vector3d; using Eigen::Vector2d;
 
 void EKF::init(const State& /*x0*/) {
@@ -100,4 +101,48 @@ bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& t
   }
   
   return true;
+}
+
+void EKF::update_gravity(State& x, const IIR1& f_N_z) {
+  // Constants for the gravity update
+  const double g_grad = 3.086e-6;   // Gravity gradient (m/s^2 per m of altitude)
+  const double R = 5e-5;            // Tighter measurement noise for stronger update
+  const double nis_gate = 9.21;     // 97.5% NIS gate - accept more updates
+  const double lat_rad = 32.0 * M_PI/180.0;  // Fixed latitude for Phase 1
+
+  // 1. Get Observed Gravity (from the smoothed specific force)
+  // We assume kinematic acceleration is small, so g_obs ≈ -f_N_z
+  double g_obs = -f_N_z.y;
+
+  // 2. Get Predicted Gravity (from the filter's state)
+  GravityQuery q{ .lat_rad = lat_rad, .alt_m = -x.p_NED.z() };
+  GravityResult gr = GravityModel::normal(q);
+  double g_pred = gr.g_mps2;
+
+  // 3. Form the Residual (Innovation)
+  double y = g_obs - g_pred;
+
+  // 4. Form the Measurement Jacobian (H)
+  // The measurement is g = g(pd). The partial derivative ∂g/∂pd is the gravity gradient.
+  // Note: altitude is -pd, so ∂g/∂pd = -∂g/∂alt = -(-g_grad) = +g_grad
+  double H = g_grad;
+
+  // 5. Calculate Innovation Covariance (S) and perform NIS check
+  double S = H * P_pos_(2,2) * H + R;
+  double nis = y * y / S;
+
+  if (nis > nis_gate) {
+    return; // Measurement is inconsistent, reject it
+  }
+
+  // 6. Calculate Kalman Gain (K)
+  double K = P_pos_(2,2) * H / S;
+
+  // 7. Update State and Covariance with soft factor for stability
+  const double alpha = 0.5;  // Stronger update for better vertical control
+  x.p_NED.z() += alpha * K * y;
+  P_pos_(2,2) = (1.0 - alpha * K * H) * P_pos_(2,2);
+  
+  // Ensure positive definite
+  P_pos_(2,2) = std::max(P_pos_(2,2), 0.01);
 }
