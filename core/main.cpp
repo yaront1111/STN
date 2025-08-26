@@ -11,6 +11,7 @@
 #include "ekf.h"
 #include "gravity_model.h"
 #include "../cpp/core/gravity_anomaly.h"  // Add gravity anomaly provider
+#include "../cpp/core/config.h"  // Configuration system
 #include "filters.h"
 #include "terrain_provider.h"
 #include "../cpp/core/trn_update_adaptive.h"
@@ -37,8 +38,13 @@ static std::vector<Row> read_csv(const std::string& path) {
 }
 
 int main(int argc, char** argv) {
+  // Load configuration
+  Config& config = Config::instance();
+  config.loadFromFile("config/stn_default.cfg");
+  config.parseCommandLine(argc, argv);  // Allow command-line overrides
+  
   std::string in  = (argc>1)? argv[1] : "data/sim_imu.csv";
-  std::string out = (argc>2)? argv[2] : "data/run_output.csv";
+  std::string out = (argc>2)? argv[2] : config.getString("paths.output", "data/run_output.csv");
   auto rows = read_csv(in);
   if(rows.empty()){ std::cerr<<"No input: "<<in<<"\n"; return 1; }
   // Load radalt with interpolation sampler
@@ -53,8 +59,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Config (v0.1 constants)
-  const double dt = 0.01;
+  // Config from file
+  const double dt = 1.0 / config.getDouble("system.imu_rate_hz", 200.0);
 
   State x; StrapdownINS ins({dt, 9.80665}); EKF ekf;
   
@@ -78,26 +84,26 @@ int main(int argc, char** argv) {
   
   ekf.init(x);
   
-  // TRN setup
+  // TRN setup from config
   TerrainProvider terrain;
-  constexpr bool USE_TRN = true;   // toggle TRN fusion
-  constexpr bool USE_ADAPTIVE_TRN = true;  // Use adaptive TRN with Huber
-  constexpr bool USE_SCALAR_AGL = false;  // Legacy scalar AGL update
-  // Time-based TRN scheduling with accumulator (no missed ticks)
-  const double trn_rate_hz = 12.0;  // 12 Hz for better stability
+  const bool USE_TRN = config.getBool("trn.enabled", true);
+  const bool USE_ADAPTIVE_TRN = true;  // Always use adaptive
+  const bool USE_SCALAR_AGL = false;  // Deprecated
+  // Time-based TRN scheduling
+  const double trn_rate_hz = config.getDouble("system.trn_rate_hz", 2.0);
   const double trn_period = 1.0 / trn_rate_hz;
-  double next_trn_t = rows[0].t + trn_period;  // Start from first IMU time
+  double next_trn_t = rows[0].t + trn_period;
   int trn_fired = 0;
   int trn_updates = 0;
   int trn_rejected = 0;
   int trn_no_radalt = 0;
   
-  // Adaptive TRN config - optimized for Grade A
+  // Adaptive TRN config from file
   TrnAdaptiveCfg trn_cfg;
-  trn_cfg.sigma_agl = 0.75;      // Slightly looser for stability
-  trn_cfg.nis_gate = 9.21;       // 97.5% gate
-  trn_cfg.slope_thresh = 0.03;   // 3% grade minimum - accept more for stability
-  trn_cfg.alpha_base = 0.2;      // Conservative with 12Hz
+  trn_cfg.sigma_agl = config.getDouble("ekf.r_trn_base", 25.0);
+  trn_cfg.nis_gate = config.getDouble("trn.huber_threshold", 3.0) * config.getDouble("trn.huber_threshold", 3.0);
+  trn_cfg.slope_thresh = config.getDouble("trn.slope_threshold", 0.1);
+  trn_cfg.alpha_base = config.getDouble("trn.alpha_base", 0.001);
   trn_cfg.alpha_boost = 1.35;    // Gentle boost on slopes
   trn_cfg.huber_c = 1.8;         // Less aggressive outlier rejection
   trn_cfg.max_step = 0.35;       // Conservative step limit
