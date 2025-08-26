@@ -10,6 +10,7 @@
 #include "ins.h"
 #include "ekf.h"
 #include "gravity_model.h"
+#include "../cpp/core/gravity_anomaly.h"  // Add gravity anomaly provider
 #include "filters.h"
 #include "terrain_provider.h"
 #include "../cpp/core/trn_update_adaptive.h"
@@ -57,6 +58,13 @@ int main(int argc, char** argv) {
 
   State x; StrapdownINS ins({dt, 9.80665}); EKF ekf;
   
+  // Initialize gravity anomaly provider
+  GravityAnomalyProvider grav_anomaly;
+  grav_anomaly.loadEGM2008("data/egm2008.dat");  // Will use synthetic if file not found
+  
+  // Configure Singer model for realistic vehicle dynamics
+  ekf.setSingerParams(0.5, 60.0);  // 0.5 m/s² accel noise, 60s correlation time
+  
   // Initialize state to match truth initial conditions
   x.p_NED = Eigen::Vector3d(0.5, 0.0, 0.0);   // Truth starts at pn=0.5m
   x.v_NED = Eigen::Vector3d(50.0, 0.0, 0.0);  // Truth starts with 50 m/s north
@@ -94,6 +102,9 @@ int main(int argc, char** argv) {
   trn_cfg.huber_c = 1.8;         // Less aggressive outlier rejection
   trn_cfg.max_step = 0.35;       // Conservative step limit
   
+  // Enable full-state updates for bias estimation
+  const bool USE_FULLSTATE_UPDATE = false;  // Disabled - needs better observability
+  
   // Health logging with kappa
   std::ofstream trn_log("data/trn_health.csv");
   trn_log << "t,accepted,nis,alpha_h,R,slope,kappa,residual,pn,pe,pd\n";
@@ -126,6 +137,29 @@ int main(int argc, char** argv) {
     // Call gravity update periodically (2 Hz for stable vertical constraint)
     if (++grav_update_counter % 50 == 0) {  // 100Hz/50 = 2Hz
       ekf.update_gravity(x, f_N_z_filt);
+      
+      // --- NEW: Gravity Anomaly Update (Spacetime Navigation) ---
+      // Get current position in lat/lon for gravity lookup
+      // Using simple flat-earth approximation for demo
+      const double ref_lat = 32.0;  // Reference latitude (degrees)
+      const double ref_lon = -110.0;  // Reference longitude (degrees)
+      const double lat_to_m = 111320.0;
+      const double lon_to_m = 111320.0 * cos(ref_lat * M_PI / 180.0);
+      
+      double lat = ref_lat + x.p_NED.x() / lat_to_m;
+      double lon = ref_lon + x.p_NED.y() / lon_to_m;
+      double alt = -x.p_NED.z();
+      
+      // Get gravity anomaly at current position
+      double g_anomaly = grav_anomaly.getAnomaly(lat, lon);
+      
+      // Could implement anomaly-based position update here
+      // For now, just log the anomaly for analysis
+      static int anomaly_log_counter = 0;
+      if (++anomaly_log_counter % 100 == 0) {  // Log every second
+        std::cout << "Gravity anomaly at (" << lat << ", " << lon 
+                  << ", " << alt << "m): " << g_anomaly*1e5 << " mGal\n";
+      }
     }
 
     
@@ -167,29 +201,44 @@ int main(int argc, char** argv) {
       }
       
       if (USE_ADAPTIVE_TRN && vel_consistent) {
-        // Adaptive TRN with slope-aware alpha
-        double nis = 0, alpha = 0;
-        double residual = z_agl - ((-x.p_NED.z()) - ts.h);
+        // Variables for logging
+        bool accepted = false;
+        double nis = 0, alpha = 0, residual = 0;
         
-        // Create local copies for update
-        Eigen::Vector3d p_local = x.p_NED;
-        Eigen::Matrix3d P_local = ekf.get_P_pos();
-        
-        bool accepted = trn_update_adaptive(
-            p_local, P_local, x.v_NED,
-            z_agl, ts.h, ts.grad,
-            trn_cfg, &nis, &alpha,
-            has_prev_agl ? z_agl_prev : z_agl,
-            has_prev_agl ? (x.t - t_agl_prev) : 0.0
-        );
-        
-        if (accepted) {
-          // Feed back to nav state
-          x.p_NED = p_local;
-          ekf.set_P_pos(P_local);
-          trn_updates++;
+        // Use full-state or position-only update
+        if (USE_FULLSTATE_UPDATE) {
+          // Full-state update enables IMU bias estimation
+          residual = z_agl - ((-x.p_NED.z()) - ts.h);
+          accepted = ekf.update_agl_fullstate(x, z_agl, ts.h, ts.grad);
+          if (accepted) {
+            trn_updates++;
+          } else {
+            trn_rejected++;
+          }
         } else {
-          trn_rejected++;
+          // Legacy adaptive TRN (position-only)
+          residual = z_agl - ((-x.p_NED.z()) - ts.h);
+          
+          // Create local copies for update
+          Eigen::Vector3d p_local = x.p_NED;
+          Eigen::Matrix3d P_local = ekf.get_P_pos();
+          
+          accepted = trn_update_adaptive(
+              p_local, P_local, x.v_NED,
+              z_agl, ts.h, ts.grad,
+              trn_cfg, &nis, &alpha,
+              has_prev_agl ? z_agl_prev : z_agl,
+              has_prev_agl ? (x.t - t_agl_prev) : 0.0
+          );
+          
+          if (accepted) {
+            // Feed back to nav state
+            x.p_NED = p_local;
+            ekf.set_P_pos(P_local);
+            trn_updates++;
+          } else {
+            trn_rejected++;
+          }
         }
         
         // Log health metrics

@@ -36,6 +36,27 @@ dist/
 
 # Data files (can be regenerated)
 data/*.csv
+data/*.dat
+data/*.png
+data/terrain/*.hgt
+data/terrain/*.zip
+data/real/
+python/real_data/data/
+python/real_data/build/
+
+# Test outputs
+*_output.csv
+*_errors.csv
+test_*.csv
 
 # Logs
 *.log
+
+# Temporary files
+*.tmp
+*.bak
+
+# Large downloaded files
+*.zip
+*.tar.gz
+*.hgt

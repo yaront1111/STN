@@ -3,26 +3,88 @@
 using Eigen::Matrix3d; using Eigen::Vector3d; using Eigen::Vector2d;
 
 void EKF::init(const State& /*x0*/) {
-  P_.setIdentity(); P_ *= 1e-2; 
-  P_pos_ = Matrix3d::Identity() * 100.0;  // Large initial position uncertainty
+  P_.setZero();
+  
+  // Initialize covariance with realistic values
+  // Position uncertainty (meters)
+  P_.block<3,3>(0,0) = Matrix3d::Identity() * 100.0;
+  
+  // Velocity uncertainty (m/s)
+  P_.block<3,3>(3,3) = Matrix3d::Identity() * 10.0;
+  
+  // Attitude uncertainty (radians)
+  P_.block<3,3>(6,6) = Matrix3d::Identity() * 0.1;
+  
+  // Accelerometer bias uncertainty (m/s^2)
+  P_.block<3,3>(9,9) = Matrix3d::Identity() * 0.01;
+  
+  // Gyro bias uncertainty (rad/s)
+  P_.block<3,3>(12,12) = Matrix3d::Identity() * 0.001;
+  
   inited_ = true;
 }
 
 void EKF::propagate(State& /*x*/, double dt) {
   if(!inited_) return;
-  P_ += Eigen::Matrix<double,15,15>::Identity()*1e-4;
   
-  // Position random walk process noise - optimized for Grade A
-  const double q_horiz = 1.5;  // m^2/s - balanced for stability
-  const double q_vert = 0.3;   // m^2/s - vertical tighter with baro
-  P_pos_(0,0) += q_horiz * dt;
-  P_pos_(1,1) += q_horiz * dt;
-  P_pos_(2,2) += q_vert * dt;
+  // State transition matrix F for position-velocity dynamics
+  Eigen::Matrix<double, 15, 15> F = Eigen::Matrix<double, 15, 15>::Identity();
   
-  // Limit covariance growth but also maintain minimum
-  for(int i = 0; i < 3; i++) {
-    P_pos_(i,i) = std::clamp(P_pos_(i,i), 0.01, 100.0);  // Between 0.1m and 10m std dev
+  // Position-velocity coupling: p_new = p_old + v*dt
+  F.block<3,3>(0,3) = Matrix3d::Identity() * dt;
+  
+  // Propagate covariance: P = F * P * F'
+  P_ = F * P_ * F.transpose();
+  
+  // Add Singer acceleration model process noise
+  Eigen::Matrix<double, 6, 6> Q_pv = computeSingerQ(dt);
+  P_.block<6,6>(0,0) += Q_pv;
+  
+  // Attitude process noise (random walk)
+  P_.block<3,3>(6,6) += Matrix3d::Identity() * 1e-6 * dt;
+  
+  // IMU bias process noise (slow random walk)
+  P_.block<3,3>(9,9) += Matrix3d::Identity() * 1e-8 * dt;   // Accel bias
+  P_.block<3,3>(12,12) += Matrix3d::Identity() * 1e-10 * dt; // Gyro bias
+  
+  // Ensure positive definiteness
+  for(int i = 0; i < 15; i++) {
+    P_(i,i) = std::max(P_(i,i), 1e-9);
   }
+}
+
+Eigen::Matrix<double, 6, 6> EKF::computeSingerQ(double dt) const {
+  // Singer acceleration model Q matrix
+  // Based on "Estimation and Control of Witsenhausen" formulation
+  
+  Eigen::Matrix<double, 6, 6> Q;
+  Q.setZero();
+  
+  double sigma2 = singer_sigma_ * singer_sigma_;
+  double tau = singer_tau_;
+  
+  // Helper terms
+  double dt2 = dt * dt;
+  double dt3 = dt2 * dt;
+  double dt4 = dt3 * dt;
+  double dt5 = dt4 * dt;
+  
+  // For each axis (North, East, Down)
+  for(int i = 0; i < 3; i++) {
+    // Position-Position
+    Q(i,i) = sigma2 * dt5 / 20.0;
+    
+    // Position-Velocity & Velocity-Position
+    Q(i,i+3) = Q(i+3,i) = sigma2 * dt4 / 8.0;
+    
+    // Velocity-Velocity
+    Q(i+3,i+3) = sigma2 * dt3 / 3.0;
+  }
+  
+  // Apply correlation time scaling
+  Q *= (1.0 - exp(-dt/tau));
+  
+  return Q;
 }
 
 void EKF::update_position(State& x, const Vector3d& z, const Matrix3d& R) {
@@ -98,6 +160,69 @@ bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& t
   // Ensure covariance stays positive definite
   for(int i = 0; i < 3; i++) {
     P_pos_(i,i) = std::max(P_pos_(i,i), 0.01);
+  }
+  
+  return true;
+}
+
+bool EKF::update_agl_fullstate(State& x, double z_agl, double terrain_h, const Vector2d& terrain_grad) {
+  if(!inited_) init(x);
+  
+  // Configuration parameters
+  const double sigma_agl = 0.7;
+  const double nis_gate = 9.21;
+  const double slope_floor = 0.02;
+  const double alpha = 0.3;
+  
+  // Predicted AGL
+  double z_pred = (-x.p_NED.z()) - terrain_h;
+  double y = z_agl - z_pred;  // Innovation
+  
+  // Full measurement Jacobian H (1x15)
+  // Only position affects AGL measurement
+  Eigen::Matrix<double, 1, 15> H;
+  H.setZero();
+  H(0,0) = -terrain_grad.x();  // ∂AGL/∂pn
+  H(0,1) = -terrain_grad.y();  // ∂AGL/∂pe  
+  H(0,2) = -1.0;                // ∂AGL/∂pd
+  
+  // Measurement noise (inflate for flat terrain)
+  double slope = std::max(terrain_grad.norm(), 1e-6);
+  double R_scalar = sigma_agl * sigma_agl * (1.0 + std::pow(slope_floor / slope, 2.0));
+  
+  // Innovation covariance
+  double S = (H * P_ * H.transpose())(0,0) + R_scalar;
+  
+  // NIS check
+  double nis = (y * y) / S;
+  if (nis > nis_gate) {
+    return false;
+  }
+  
+  // Full-state Kalman gain (15x1)
+  Eigen::Matrix<double, 15, 1> K = (P_ * H.transpose()) / S;
+  
+  // Update all states (including biases!)
+  Eigen::Matrix<double, 15, 1> dx = alpha * K * y;
+  
+  // Apply updates
+  x.p_NED += dx.segment<3>(0);      // Position
+  x.v_NED += dx.segment<3>(3);      // Velocity
+  // Attitude update (small angle approximation)
+  Vector3d dtheta = dx.segment<3>(6);
+  Eigen::Quaterniond dq(1, 0.5*dtheta.x(), 0.5*dtheta.y(), 0.5*dtheta.z());
+  x.q_BN = (x.q_BN * dq).normalized();
+  
+  x.b_a += dx.segment<3>(9);        // Accel bias
+  x.b_g += dx.segment<3>(12);       // Gyro bias
+  
+  // Joseph form covariance update for numerical stability
+  Eigen::Matrix<double, 15, 15> I_KH = Eigen::Matrix<double, 15, 15>::Identity() - alpha * K * H;
+  P_ = I_KH * P_ * I_KH.transpose() + alpha * alpha * K * R_scalar * K.transpose();
+  
+  // Ensure positive definiteness
+  for(int i = 0; i < 15; i++) {
+    P_(i,i) = std::max(P_(i,i), 1e-9);
   }
   
   return true;
