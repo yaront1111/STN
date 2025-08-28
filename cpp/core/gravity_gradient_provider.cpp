@@ -83,10 +83,12 @@ GravityGradientProvider::computeLegendre(double theta, int max_degree) const {
     // Compute derivatives
     for (int n = 1; n <= max_degree; ++n) {
         for (int m = 0; m <= n && m <= max_degree; ++m) {
-            if (m == 0) {
-                terms.dP(n, 0) = -terms.P(n, 1);
-            } else {
-                terms.dP(n, m) = 0.5 * ((n+m)*(n-m+1)*terms.P(n, m-1) - terms.P(n, m+1));
+            if (m == 0 && n < size) {
+                terms.dP(n, 0) = (1 < size) ? -terms.P(n, 1) : 0.0;
+            } else if (m > 0 && m < size && n < size) {
+                double term1 = (m-1 >= 0 && m-1 < size) ? terms.P(n, m-1) : 0.0;
+                double term2 = (m+1 < size) ? terms.P(n, m+1) : 0.0;
+                terms.dP(n, m) = 0.5 * ((n+m)*(n-m+1)*term1 - term2);
             }
         }
     }

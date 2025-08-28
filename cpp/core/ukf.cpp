@@ -41,7 +41,8 @@ Eigen::VectorXd UKF::stateToVector(const State& x) {
     vec.segment<3>(VEL_IDX) = x.v_ECEF;
     
     // Convert quaternion to rotation vector for additive updates
-    Eigen::AngleAxisd aa(x.q_ECEF_B);
+    Eigen::Quaterniond q_norm = x.q_ECEF_B.normalized();
+    Eigen::AngleAxisd aa(q_norm);
     vec.segment<3>(ATT_IDX) = aa.axis() * aa.angle();
     
     vec.segment<3>(BA_IDX) = x.b_a;
@@ -62,6 +63,7 @@ State UKF::vectorToState(const Eigen::VectorXd& vec) {
     double angle = rot_vec.norm();
     if (angle > 1e-10) {
         x.q_ECEF_B = Eigen::Quaterniond(Eigen::AngleAxisd(angle, rot_vec / angle));
+        x.q_ECEF_B.normalize();
     } else {
         x.q_ECEF_B = Eigen::Quaterniond::Identity();
     }
@@ -75,9 +77,35 @@ State UKF::vectorToState(const Eigen::VectorXd& vec) {
 }
 
 void UKF::generateSigmaPoints() {
+    // Check if P is valid
+    if (!P_.allFinite()) {
+        std::cerr << "WARNING: Covariance matrix P has NaN/Inf values!" << std::endl;
+        // Reset to identity
+        P_ = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM);
+    }
+    
+    // Ensure P is symmetric before Cholesky decomposition
+    Eigen::MatrixXd P_sym = (P_ + P_.transpose()) / 2.0;
+    
+    // Add small diagonal regularization if needed
+    double min_eig = 1e-10;
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_sym);
+    if (es.eigenvalues().minCoeff() < min_eig) {
+        P_sym += Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * min_eig;
+    }
+    
     // Compute matrix square root using Cholesky decomposition
-    Eigen::LLT<Eigen::MatrixXd> llt((STATE_DIM + lambda_) * P_);
-    Eigen::MatrixXd sqrt_P = llt.matrixL();
+    Eigen::MatrixXd sqrt_P;
+    Eigen::LLT<Eigen::MatrixXd> llt((STATE_DIM + lambda_) * P_sym);
+    
+    if (llt.info() != Eigen::Success) {
+        // Cholesky failed - use more robust eigenvalue decomposition
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es2((STATE_DIM + lambda_) * P_sym);
+        Eigen::MatrixXd D = es2.eigenvalues().array().max(0).sqrt().matrix().asDiagonal();
+        sqrt_P = es2.eigenvectors() * D;
+    } else {
+        sqrt_P = llt.matrixL();
+    }
     
     // Mean state
     Eigen::VectorXd x_vec = stateToVector(x_);
@@ -150,16 +178,26 @@ void UKF::predict(double dt) {
     
     // Add process noise
     Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(STATE_DIM, STATE_DIM);
-    Q.diagonal() << 
-        Eigen::Vector3d::Constant(cfg_.q_pos * dt * dt).array(),
-        Eigen::Vector3d::Constant(cfg_.q_vel * dt).array(),
-        Eigen::Vector3d::Constant(cfg_.q_att * dt).array(),
-        Eigen::Vector3d::Constant(cfg_.q_acc_bias * dt).array(),
-        Eigen::Vector3d::Constant(cfg_.q_gyro_bias * dt).array(),
-        cfg_.q_clock_offset * dt,
-        cfg_.q_clock_drift * dt;
+    Eigen::VectorXd q_diag(STATE_DIM);
+    q_diag.segment<3>(0) = Eigen::Vector3d::Constant(cfg_.q_pos * dt * dt);
+    q_diag.segment<3>(3) = Eigen::Vector3d::Constant(cfg_.q_vel * dt);
+    q_diag.segment<3>(6) = Eigen::Vector3d::Constant(cfg_.q_att * dt);
+    q_diag.segment<3>(10) = Eigen::Vector3d::Constant(cfg_.q_acc_bias * dt);
+    q_diag.segment<3>(13) = Eigen::Vector3d::Constant(cfg_.q_gyro_bias * dt);
+    q_diag(16) = cfg_.q_clock_offset * dt;
+    q_diag(17) = cfg_.q_clock_drift * dt;
+    Q.diagonal() = q_diag;
     
     P_ += Q;
+    
+    // Enforce symmetry to prevent numerical instability
+    P_ = (P_ + P_.transpose()) / 2.0;
+    
+    // Ensure positive definiteness
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_);
+    if (es.eigenvalues().minCoeff() < 1e-10) {
+        P_ += Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 1e-9;
+    }
     
     // Update sigma points for measurement update
     sigma_points_ = propagated_sigma;
@@ -176,10 +214,9 @@ Eigen::Matrix3d UKF::computeGradientFromPosition(const Eigen::Vector3d& pos_ECEF
     // Compute gravity gradient from EGM2020 model
     // For now, return a synthetic gradient for testing
     Eigen::Matrix3d gradient;
-    gradient << 
-        3.0, 0.1, 0.2,
-        0.1, -1.5, 0.15,
-        0.2, 0.15, -1.5;
+    gradient << 3.0, 0.1, 0.2,
+                0.1, -1.5, 0.15,
+                0.2, 0.15, -1.5;
     
     // Add latitude-dependent variation
     gradient *= (1.0 + 0.5 * std::sin(lat));
@@ -291,11 +328,31 @@ void UKF::updateGravityAnomaly(double measured_anomaly, double anomaly_noise) {
     // Update covariance
     P_ = P_ - K * Pxy.transpose();
     
-    // Ensure positive definiteness
+    // Ensure positive definiteness and symmetry
     P_ = (P_ + P_.transpose()) / 2.0;
+    
+    // Add regularization if needed
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_);
+    if (es.eigenvalues().minCoeff() < 1e-10) {
+        P_ += Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 1e-9;
+    }
 }
 
 void UKF::propagateWithIMU(const ImuSample& imu, double dt) {
+    // Validate IMU measurements (reject unrealistic values)
+    const double MAX_ACC = 50.0;  // 5g max acceleration
+    const double MAX_GYRO = 3.0;  // ~170 deg/s max rotation
+    
+    if (imu.acc_mps2.norm() > MAX_ACC || imu.gyro_rps.norm() > MAX_GYRO) {
+        // Skip this measurement - too large to be real
+        return;
+    }
+    
+    // Check for NaN
+    if (!imu.acc_mps2.allFinite() || !imu.gyro_rps.allFinite()) {
+        return;
+    }
+    
     // First predict with dynamics
     predict(dt);
     
