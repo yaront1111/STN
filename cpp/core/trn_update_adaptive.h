@@ -3,13 +3,13 @@
 #include <cmath>
 
 struct TrnAdaptiveCfg {
-    double sigma_agl = 0.8;      // Radar altimeter noise (m)
-    double nis_gate = 9.21;      // Chi-squared gate for scalar
-    double slope_thresh = 0.06;  // Minimum slope for full observability (6% grade)
-    double alpha_base = 0.35;    // Base update strength
-    double alpha_boost = 1.5;    // Boost factor for high slopes
-    double huber_c = 1.5;        // Huber threshold
-    double max_step = 0.5;       // Maximum position step (m)
+    double sigma_agl = 0.5;      // Radar altimeter noise (m) - reduced for cleaner data
+    double nis_gate = 12.59;     // Chi-squared gate for scalar - more permissive
+    double slope_thresh = 0.002; // Minimum slope for observability (0.2% grade for flat terrain)
+    double alpha_base = 0.15;    // Base update strength - start aggressive
+    double alpha_boost = 2.0;    // Boost factor for high slopes
+    double huber_c = 2.5;        // Huber threshold - less aggressive
+    double max_step = 1.0;       // Maximum position step (m) - allow larger corrections
 };
 
 inline bool trn_update_adaptive(
@@ -61,44 +61,36 @@ inline bool trn_update_adaptive(
         return false;
     }
     
-    // Adaptive alpha based on slope - adjusted for flat terrain
-    // For flat terrain, use a different scaling
-    double slope_factor = std::min(1.0, slope / 0.01);  // Full strength at 1% grade (was 15%)
+    // Smart adaptive alpha with time-varying confidence
+    // Note: We don't have access to x.t here, so we'll use a different approach
+    // Base alpha varies with slope
+    double slope_factor = std::min(1.0, slope / 0.01);  // Full strength at 1% grade
     double alpha = cfg.alpha_base * (1.0 + (cfg.alpha_boost - 1.0) * slope_factor);
     
-    // Enhanced velocity consistency check
+    // Velocity consistency check (less aggressive)
     if (dt > 0 && dt < 1.0) {  // Valid time delta
         double rdot_pred = -v_NED.z() - (terrain_grad.x() * v_NED.x() + terrain_grad.y() * v_NED.y());
         double rdot_meas = (z_agl - z_agl_prev) / dt;
         double rdot_err = std::abs(rdot_meas - rdot_pred);
         
-        // Adaptive scaling based on velocity consistency
-        if (rdot_err > 5.0) {  // Large inconsistency
-            // Strong reduction for likely outliers
-            alpha *= std::exp(-rdot_err / 5.0);
-        } else if (rdot_err > 2.0) {
-            // Moderate reduction
-            alpha *= (1.0 - 0.3 * (rdot_err - 2.0) / 3.0);
+        // Only reduce for very large inconsistencies
+        if (rdot_err > 10.0) {  // Very large inconsistency
+            alpha *= 0.5;
+        } else if (rdot_err > 5.0) {
+            alpha *= 0.75;
         }
-        // Small errors don't affect alpha
+        // Normal errors don't affect alpha
     }
     
     alpha = std::min(alpha, 0.8);  // Cap at 0.8
     if (alpha_out) *alpha_out = alpha;
     
-    // Enhanced Huber robustification with adaptive threshold
+    // Huber robustification (less aggressive)
     double huber_weight = 1.0;
-    double adaptive_huber_c = cfg.huber_c;
     
-    // Tighten Huber threshold for flat terrain (more prone to errors)
-    if (slope < 0.05) {
-        adaptive_huber_c *= 0.7;
-    }
-    
-    if (std::abs(y) > adaptive_huber_c) {
-        // Smooth Huber function for better continuity
-        double ratio = adaptive_huber_c / std::abs(y);
-        huber_weight = ratio * ratio;  // Quadratic taper
+    if (std::abs(y) > cfg.huber_c) {
+        // Linear Huber for less aggressive outlier handling
+        huber_weight = cfg.huber_c / std::abs(y);
     }
     
     // Kalman gain

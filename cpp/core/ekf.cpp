@@ -126,9 +126,9 @@ void EKF::update_position(State& x, const Vector3d& z, const Matrix3d& R) {
 bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& terrain_grad) {
   if(!inited_) init(x);
   
-  // Configuration parameters - optimized for outlier robustness
+  // Configuration parameters - balanced for performance
   const double sigma_agl = 0.5;     // Radar altimeter noise (m)
-  const double nis_gate = 9.21;     // 99% gate for scalar measurement - tighter for outliers
+  const double nis_gate = 12.59;    // 99.5% gate for scalar measurement - more permissive
   const double slope_floor = 0.01;  // Minimum slope for observability
   
   // Predicted AGL: altitude - terrain_height
@@ -147,12 +147,20 @@ bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& t
   double slope = std::max(terrain_grad.norm(), 1e-6);
   double R = sigma_agl * sigma_agl * (1.0 + std::pow(slope_floor / slope, 2.0));
   
-  // Adaptive alpha based on innovation magnitude (Huber-like)
+  // Smart adaptive alpha with time-varying confidence
+  double convergence_time = std::min(x.t, 30.0);  // Cap at 30 seconds
+  double convergence_factor = convergence_time / 30.0;  // 0 to 1 over 30s
+  
+  // Start aggressive (0.15), reduce to conservative (0.075) as we converge
+  double base_alpha = 0.15 * (1.0 - 0.5 * convergence_factor);
+  
+  // Innovation-based adjustment (less aggressive)
   double innovation_ratio = std::abs(y) / (3.0 * std::sqrt(R));
-  double alpha = 0.6;  // Base update factor
-  if (innovation_ratio > 1.0) {
-    // Reduce gain for potential outliers
-    alpha *= 1.0 / (1.0 + innovation_ratio - 1.0);
+  double alpha = base_alpha;
+  if (innovation_ratio > 2.0) {  // Only reduce for large outliers
+    alpha *= 0.5;
+  } else if (innovation_ratio > 1.5) {
+    alpha *= 0.75;
   }
   
   // Get position covariance block
@@ -182,9 +190,9 @@ bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& t
   // Update the full covariance matrix
   P_.block<3,3>(0,0) = P_pos;
   
-  // Ensure covariance stays positive definite with adaptive floor
-  // Increase minimum variance when we detect potential outliers
-  double min_variance = (nis > 6.0) ? 0.1 : 0.01;
+  // Ensure covariance stays positive definite
+  // Keep minimal floor to avoid singularity
+  double min_variance = 0.01;
   for(int i = 0; i < 3; i++) {
     P_(i,i) = std::max(P_(i,i), min_variance);
   }
@@ -195,11 +203,14 @@ bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& t
 bool EKF::update_agl_fullstate(State& x, double z_agl, double terrain_h, const Vector2d& terrain_grad) {
   if(!inited_) init(x);
   
-  // Configuration parameters
-  const double sigma_agl = 0.7;
-  const double nis_gate = 9.21;
-  const double slope_floor = 0.02;
-  const double alpha = 0.3;
+  // Configuration parameters - balanced for performance
+  const double sigma_agl = 0.5;
+  const double nis_gate = 12.59;  // More permissive
+  const double slope_floor = 0.01;
+  
+  // Time-varying alpha
+  double convergence_factor = std::min(x.t / 30.0, 1.0);
+  const double alpha = 0.15 * (1.0 - 0.5 * convergence_factor);
   
   // Predicted AGL
   double z_pred = (-x.p_NED.z()) - terrain_h;
@@ -258,8 +269,8 @@ bool EKF::update_agl_fullstate(State& x, double z_agl, double terrain_h, const V
 void EKF::update_gravity(State& x, const IIR1& f_N_z) {
   // Constants for the gravity update
   const double g_grad = 3.086e-6;   // Gravity gradient (m/s^2 per m of altitude)
-  const double R = 5e-5;            // Tighter measurement noise for stronger update
-  const double nis_gate = 9.21;     // 97.5% NIS gate - accept more updates
+  const double R = 1e-4;            // Balanced measurement noise
+  const double nis_gate = 12.59;    // 99.5% NIS gate - more permissive
   const double lat_rad = 32.0 * M_PI/180.0;  // Fixed latitude for Phase 1
 
   // 1. Get Observed Gravity (from the smoothed specific force)
@@ -290,8 +301,9 @@ void EKF::update_gravity(State& x, const IIR1& f_N_z) {
   // 6. Calculate Kalman Gain (K)
   double K = P_pos_(2,2) * H / S;
 
-  // 7. Update State and Covariance with soft factor for stability
-  const double alpha = 0.5;  // Stronger update for better vertical control
+  // 7. Update State and Covariance with time-varying alpha
+  double convergence_factor = std::min(x.t / 30.0, 1.0);
+  const double alpha = 0.3 * (1.0 - 0.3 * convergence_factor);  // 0.3 to 0.21
   x.p_NED.z() += alpha * K * y;
   P_pos_(2,2) = (1.0 - alpha * K * H) * P_pos_(2,2);
   

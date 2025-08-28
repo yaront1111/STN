@@ -1,0 +1,36 @@
+{
+  "timestamp": "2025-08-28T16:24:41.350425",
+  "tests": {
+    "build": true,
+    "executable_stn_demo": true,
+    "executable_stn_tests": true,
+    "executable_stn_benchmark": true,
+    "generate_imu": true,
+    "add_radalt": true,
+    "navigation": true,
+    "grade_check": true,
+    "metrics": {
+      "grade": "B",
+      "cep95": 30.0
+    },
+    "grade_requirement": false,
+    "unit_tests": false,
+    "benchmarks": true,
+    "benchmark_results": [],
+    "data_sim_imu": true,
+    "data_sim_truth": true,
+    "data_radalt": true,
+    "data_run_output": true,
+    "config_stn_default": true,
+    "config_stn_realworld": true,
+    "monte_carlo": false
+  },
+  "summary": {
+    "passed": 19,
+    "failed": 3,
+    "skipped": 0,
+    "total": 22,
+    "success_rate": 86.36363636363636,
+    "verdict": "WARNING"
+  }
+}
