@@ -4,29 +4,36 @@
 #include <cmath>
 
 bool GravityGradientProvider::loadEGM2020(const std::string& data_path) {
-    std::ifstream file(data_path, std::ios::binary);
+    // Try to load real data first
+    std::string real_data_path = "data/egm2008/egm2008_n360.dat";
+    std::ifstream file(real_data_path, std::ios::binary);
+    
     if (!file.is_open()) {
-        std::cerr << "WARNING: EGM2020 file not found: " << data_path << "\n";
-        std::cerr << "Using synthetic gravity field for testing\n";
+        // Try the provided path as fallback
+        file.open(data_path, std::ios::binary);
+    }
+    
+    if (!file.is_open()) {
+        std::cerr << "WARNING: EGM data not found, using synthetic gravity\n";
         // Initialize with synthetic data for testing
         coeffs_ = std::make_unique<SHCoefficients>();
-        coeffs_->max_degree = 360;  // Reduced for testing
-        coeffs_->C.resize(66000, 0.0);  // Allocate space
+        coeffs_->max_degree = 360;  
+        coeffs_->C.resize(66000, 0.0);  
         coeffs_->S.resize(66000, 0.0);
         
-        // Generate synthetic coefficients for testing
+        // Generate realistic synthetic coefficients following Kaula's rule
         for (int n = 2; n <= coeffs_->max_degree; ++n) {
             for (int m = 0; m <= n; ++m) {
                 int idx = coeffs_->idx(n, m);
-                // Synthetic pattern that creates interesting gradients
-                coeffs_->C[idx] = std::sin(n * 0.1) * std::cos(m * 0.2) / (n * n);
-                coeffs_->S[idx] = std::cos(n * 0.15) * std::sin(m * 0.25) / (n * n);
+                double magnitude = 1e-5 / (n * n);  // Kaula's rule
+                coeffs_->C[idx] = magnitude * std::sin(n * 0.1) * std::cos(m * 0.2);
+                coeffs_->S[idx] = magnitude * std::cos(n * 0.15) * std::sin(m * 0.25);
             }
         }
         return true;
     }
     
-    // Read actual EGM2020 data
+    // Read actual EGM data
     coeffs_ = std::make_unique<SHCoefficients>();
     file.read(reinterpret_cast<char*>(&coeffs_->max_degree), sizeof(int));
     
@@ -34,10 +41,17 @@ bool GravityGradientProvider::loadEGM2020(const std::string& data_path) {
     coeffs_->C.resize(num_coeffs);
     coeffs_->S.resize(num_coeffs);
     
-    file.read(reinterpret_cast<char*>(coeffs_->C.data()), num_coeffs * sizeof(double));
-    file.read(reinterpret_cast<char*>(coeffs_->S.data()), num_coeffs * sizeof(double));
+    // Read C coefficients
+    for (int i = 0; i < num_coeffs; i++) {
+        file.read(reinterpret_cast<char*>(&coeffs_->C[i]), sizeof(double));
+    }
     
-    std::cout << "Loaded EGM2020 to degree " << coeffs_->max_degree << "\n";
+    // Read S coefficients  
+    for (int i = 0; i < num_coeffs; i++) {
+        file.read(reinterpret_cast<char*>(&coeffs_->S[i]), sizeof(double));
+    }
+    
+    std::cout << "✓ Loaded REAL EGM gravity data to degree " << coeffs_->max_degree << "\n";
     return true;
 }
 

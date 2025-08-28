@@ -60,3 +60,5 @@ test_*.csv
 *.zip
 *.tar.gz
 *.hgt
+data/egm2008/EGM2008.gfc
+data/egm2008/*.gfc

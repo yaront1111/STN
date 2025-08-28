@@ -18,12 +18,13 @@ static double normal_gravity(double lat_rad, double alt_m) {
 
 void GravityModel::initialize() {
   if (!initialized_) {
-    egm2008_reader_ = std::make_unique<EGM2008Reader>("data/egm2008.dat");
+    // Try to load real EGM2008 data
+    egm2008_reader_ = std::make_unique<EGM2008Reader>("data/egm2008/egm2008_n360.dat");
     initialized_ = true;
     if (egm2008_reader_->isLoaded()) {
-      std::cout << "EGM2008 gravity model initialized\n";
+      std::cout << "Loaded REAL EGM2008 gravity model data\n";
     } else {
-      std::cout << "Using synthetic gravity anomalies\n";
+      std::cout << "Warning: Using synthetic gravity anomalies\n";
     }
   }
 }
