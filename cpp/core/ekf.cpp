@@ -24,8 +24,12 @@ void EKF::init(const State& /*x0*/) {
   inited_ = true;
 }
 
-void EKF::propagate(State& /*x*/, double dt) {
+void EKF::propagate(State& x, double dt) {
   if(!inited_) return;
+  
+  // Propagate state (simple kinematic model for EKF consistency)
+  // Note: INS already propagated the state, but we need velocity coupling
+  // This ensures covariance matches the actual state evolution
   
   // State transition matrix F for position-velocity dynamics
   Eigen::Matrix<double, 15, 15> F = Eigen::Matrix<double, 15, 15>::Identity();

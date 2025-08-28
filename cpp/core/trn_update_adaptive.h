@@ -56,8 +56,9 @@ inline bool trn_update_adaptive(
         return false;
     }
     
-    // Adaptive alpha based on slope
-    double slope_factor = std::min(1.0, slope / 0.15);  // Full strength at 15% grade
+    // Adaptive alpha based on slope - adjusted for flat terrain
+    // For flat terrain, use a different scaling
+    double slope_factor = std::min(1.0, slope / 0.01);  // Full strength at 1% grade (was 15%)
     double alpha = cfg.alpha_base * (1.0 + (cfg.alpha_boost - 1.0) * slope_factor);
     
     // AGL-rate consistency factor (if we have previous measurement)
@@ -86,8 +87,8 @@ inline bool trn_update_adaptive(
     // Position correction with Huber weight
     Eigen::Vector3d dp = alpha * huber_weight * K * y;
     
-    // Limit step size
-    double step_norm = dp.head<2>().norm();  // Horizontal step
+    // Limit step size - apply limit to full 3D correction
+    double step_norm = dp.norm();  // Full 3D step
     if (step_norm > cfg.max_step) {
         dp *= cfg.max_step / step_norm;
     }
