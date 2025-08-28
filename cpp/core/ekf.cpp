@@ -271,7 +271,7 @@ void EKF::update_gravity(State& x, const IIR1& f_N_z) {
   const double g_grad = 3.086e-6;   // Gravity gradient (m/s^2 per m of altitude)
   const double R = 1e-4;            // Balanced measurement noise
   const double nis_gate = 12.59;    // 99.5% NIS gate - more permissive
-  const double lat_rad = 32.0 * M_PI/180.0;  // Fixed latitude for Phase 1
+  const double lat_rad = 47.4 * M_PI/180.0;  // Zurich latitude
 
   // 1. Get Observed Gravity (from the smoothed specific force)
   // We assume kinematic acceleration is small, so g_obs ≈ -f_N_z

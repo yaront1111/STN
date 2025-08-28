@@ -153,9 +153,9 @@ int main(int argc, char** argv) {
       
       // --- NEW: Gravity Anomaly Update (Spacetime Navigation) ---
       // Get current position in lat/lon for gravity lookup
-      // Using simple flat-earth approximation for demo
-      const double ref_lat = 32.0;  // Reference latitude (degrees)
-      const double ref_lon = -110.0;  // Reference longitude (degrees)
+      // Using Zurich reference to match terrain data
+      const double ref_lat = 47.4;  // Zurich latitude (degrees)
+      const double ref_lon = 8.5;   // Zurich longitude (degrees)
       const double lat_to_m = 111320.0;
       const double lon_to_m = 111320.0 * cos(ref_lat * M_PI / 180.0);
       
