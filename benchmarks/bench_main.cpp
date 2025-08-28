@@ -9,12 +9,14 @@
 #include <random>
 #include <iomanip>
 #include <algorithm>
+#include <thread>
 #include <Eigen/Dense>
 
 #include "ins.h"
 #include "ekf.h"
 #include "terrain_provider.h"
 #include "gravity_model.h"
+#include "filters.h"
 #include "../cpp/core/trn_update_adaptive.h"
 
 using namespace std::chrono;
@@ -108,9 +110,13 @@ void benchmarkINS() {
     Eigen::Vector3d f_B(dist(gen), dist(gen), -9.80665 + dist(gen));
     Eigen::Vector3d omega_B(dist(gen) * 0.01, dist(gen) * 0.01, dist(gen) * 0.01);
     
-    // Benchmark INS step
+    // Benchmark INS propagation
+    ImuSample imu;
+    imu.acc_mps2 = f_B;
+    imu.gyro_rps = omega_B;
+    
     auto ins_step = [&]() {
-        state = ins.step(state, f_B, omega_B);
+        ins.propagate(state, imu);
     };
     
     std::cout << "\n1. INS Step (full propagation):\n";
@@ -120,9 +126,10 @@ void benchmarkINS() {
     // Benchmark quaternion integration only
     auto quat_int = [&]() {
         Eigen::Quaterniond q = state.q_BN;
-        Eigen::Quaterniond omega_quat(0, omega_B.x(), omega_B.y(), omega_B.z());
-        Eigen::Quaterniond q_dot = q * omega_quat * 0.5;
-        q.coeffs() += q_dot.coeffs() * 0.005;
+        // Simple quaternion integration
+        Eigen::Vector3d omega_half = omega_B * 0.5 * 0.005;
+        Eigen::Quaterniond dq(1.0, omega_half.x(), omega_half.y(), omega_half.z());
+        q = q * dq;
         q.normalize();
     };
     
@@ -147,18 +154,18 @@ void benchmarkEKF() {
     Eigen::Vector3d a_N(1.0, 0.5, 0.1);
     Eigen::Vector3d omega(0.01, 0.02, 0.03);
     
-    // Benchmark predict step
-    auto ekf_predict = [&]() {
-        ekf.predict(a_N, omega, 0.005);
+    // Benchmark propagate step
+    auto ekf_propagate = [&]() {
+        ekf.propagate(state, 0.005);
     };
     
-    std::cout << "\n1. EKF Predict (15-state):\n";
-    auto result = runBenchmark("EKF Predict", ekf_predict, 100, 1000);
+    std::cout << "\n1. EKF Propagate (15-state):\n";
+    auto result = runBenchmark("EKF Propagate", ekf_propagate, 100, 1000);
     printResult(result);
     
     // Benchmark AGL update
     auto ekf_update_agl = [&]() {
-        ekf.update_agl(ekf.x, 100.0, -400.0, 0.1);
+        ekf.update_agl(state, 100.0, -400.0, Eigen::Vector2d(0.1, 0.0));
     };
     
     std::cout << "\n2. EKF Update AGL:\n";
@@ -166,8 +173,11 @@ void benchmarkEKF() {
     printResult(result);
     
     // Benchmark gravity update
+    IIR1 grav_filter;
+    grav_filter.alpha = 0.1;
+    grav_filter.step(-9.81);
     auto ekf_update_gravity = [&]() {
-        ekf.update_gravity(ekf.x, -9.81);
+        ekf.update_gravity(state, grav_filter);
     };
     
     std::cout << "\n3. EKF Update Gravity:\n";
@@ -263,7 +273,12 @@ void benchmarkTRN() {
     // Benchmark adaptive TRN update
     auto trn_update = [&]() {
         double agl_meas = 100.0;
-        volatile bool accepted = trn_update_adaptive(ekf, state, terrain, agl_meas, cfg);
+        Eigen::Vector3d p_copy = state.p_NED;
+        Eigen::Matrix3d P_copy = ekf.get_P_pos();
+        TerrainSample ts = terrain.sample(p_copy.x(), p_copy.y());
+        volatile bool accepted = trn_update_adaptive(
+            p_copy, P_copy, state.v_NED, agl_meas, ts.h, ts.grad, cfg
+        );
     };
     
     std::cout << "\n1. Adaptive TRN Update:\n";
@@ -297,11 +312,13 @@ void benchmarkFullSystem() {
         Eigen::Vector3d f_B(dist(gen), dist(gen), -9.80665);
         Eigen::Vector3d omega_B(dist(gen) * 0.01, dist(gen) * 0.01, dist(gen) * 0.01);
         
-        state = ins.step(state, f_B, omega_B);
+        ImuSample imu_sample;
+        imu_sample.acc_mps2 = f_B;
+        imu_sample.gyro_rps = omega_B;
+        ins.propagate(state, imu_sample);
         
-        // EKF predict
-        Eigen::Vector3d a_N = state.q_BN * f_B;
-        ekf.predict(a_N, omega_B, 0.005);
+        // EKF propagate
+        ekf.propagate(state, 0.005);
         
         // Occasional TRN update (2 Hz)
         static int counter = 0;
@@ -309,7 +326,7 @@ void benchmarkFullSystem() {
             counter = 0;
             TerrainSample ts = terrain.sample(state.p_NED.x(), state.p_NED.y());
             double agl = -state.p_NED.z() - ts.h;
-            ekf.update_agl(ekf.x, agl, ts.h, ts.grad.norm());
+            ekf.update_agl(state, agl, ts.h, ts.grad);
         }
     };
     
