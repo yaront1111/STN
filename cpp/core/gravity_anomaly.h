@@ -29,11 +29,9 @@ public:
     bool loadEGM2008(const std::string& data_file) {
         std::ifstream file(data_file, std::ios::binary);
         if (!file.is_open()) {
-            std::cerr << "Failed to open EGM2008 file: " << data_file << std::endl;
-            
-            // Create synthetic anomalies for testing
-            createSyntheticAnomalies();
-            return true;
+            std::cerr << "ERROR: EGM2008 file required but not found: " << data_file << std::endl;
+            std::cerr << "Please download EGM2008 data for production use" << std::endl;
+            return false;
         }
         
         // Read binary grid (actual EGM2008 format)
@@ -42,9 +40,8 @@ public:
                  anomaly_grid_.size() * sizeof(float));
         
         if (!file) {
-            std::cerr << "Failed to read EGM2008 data" << std::endl;
-            createSyntheticAnomalies();
-            return true;
+            std::cerr << "ERROR: Failed to read EGM2008 data" << std::endl;
+            return false;
         }
         
         // Convert from mGal to m/s^2 (1 mGal = 1e-5 m/s^2)
@@ -60,8 +57,8 @@ public:
     // Get gravity anomaly at specific location
     double getAnomaly(double lat_deg, double lon_deg) const {
         if (!loaded_) {
-            // Simple synthetic model for testing
-            return 50e-5 * sin(lat_deg * M_PI / 30.0) * cos(lon_deg * M_PI / 60.0);
+            // No data available - return zero anomaly
+            return 0.0;
         }
         
         // Wrap longitude to [-180, 180]
@@ -160,43 +157,5 @@ public:
     
 private:
     // Create synthetic gravity anomalies for testing
-    void createSyntheticAnomalies() {
-        std::cout << "Creating synthetic gravity anomalies for testing" << std::endl;
-        
-        // Use full grid size even for synthetic data
-        anomaly_grid_.resize(GRID_ROWS * GRID_COLS);
-        
-        // Fill with synthetic anomalies (sparse sampling for speed)
-        for (int r = 0; r < GRID_ROWS; r += 60) {  // Sample every degree
-            for (int c = 0; c < GRID_COLS; c += 60) {
-                double lat = -90 + r * GRID_RES;
-                double lon = -180 + c * GRID_RES;
-                
-                // Create realistic-looking anomalies
-                // Typical range: ±100 mGal = ±100e-5 m/s^2
-                double anomaly = 0;
-                
-                // Large-scale features (continental)
-                anomaly += 30e-5 * sin(lat * M_PI / 45) * cos(lon * M_PI / 90);
-                
-                // Medium-scale features (mountain ranges)
-                anomaly += 20e-5 * sin(lat * M_PI / 15) * cos(lon * M_PI / 30);
-                
-                // Small-scale features (local geology)
-                anomaly += 10e-5 * sin(lat * M_PI / 5) * cos(lon * M_PI / 10);
-                
-                // Random noise
-                anomaly += (rand() / double(RAND_MAX) - 0.5) * 5e-5;
-                
-                // Fill in surrounding cells with same value (sparse grid)
-                for (int dr = 0; dr < 60 && r+dr < GRID_ROWS; dr++) {
-                    for (int dc = 0; dc < 60 && c+dc < GRID_COLS; dc++) {
-                        anomaly_grid_[(r+dr) * GRID_COLS + (c+dc)] = anomaly;
-                    }
-                }
-            }
-        }
-        
-        loaded_ = true;
-    }
+    // Production system requires real EGM2008 data - no synthetic fallback
 };

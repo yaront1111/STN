@@ -28,13 +28,13 @@ target_include_directories(stn_core PUBLIC
 )
 target_link_libraries(stn_core Eigen3::Eigen)
 
-# Main executable
-add_executable(stn_demo core/main.cpp)
-target_link_libraries(stn_demo stn_core)
+# Main navigation executable
+add_executable(stn_navigator core/main.cpp)
+target_link_libraries(stn_navigator stn_core)
 
 # Compiler flags for optimization
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    target_compile_options(stn_demo PRIVATE -O3 -march=native)
+    target_compile_options(stn_navigator PRIVATE -O3 -march=native)
     target_compile_options(stn_core PRIVATE -O3 -march=native)
 endif()
 

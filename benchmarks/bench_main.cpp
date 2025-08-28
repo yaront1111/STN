@@ -207,7 +207,7 @@ void benchmarkTerrain() {
     printResult(result);
     
     // Test with real SRTM if available
-    if (terrain.use_real_terrain) {
+    if (terrain.srtm_reader) {
         std::cout << "\n2. Terrain Sample (SRTM):\n";
         result = runBenchmark("SRTM Sample", terrain_sample, 1000, 10000);
         printResult(result);

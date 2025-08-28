@@ -86,10 +86,8 @@ int main(int argc, char** argv) {
   
   ekf.init(x);
   
-  // TRN setup from config
+  // TRN setup - always uses real SRTM terrain
   TerrainProvider terrain;
-  // For grading, use synthetic terrain since sim assumes flat at 0m
-  terrain.use_real_terrain = config.getBool("terrain.use_srtm", false);
   const bool USE_TRN = config.getBool("trn.enabled", true);
   const bool USE_ADAPTIVE_TRN = true;  // Always use adaptive
   const bool USE_SCALAR_AGL = false;  // Deprecated

@@ -125,7 +125,7 @@ TEST_F(TerrainTest, ZeroMeanTerrain) {
 
 TEST_F(TerrainTest, CoordinateTransform) {
     // Test NED to Lat/Lon conversion (if real terrain is used)
-    if (terrain->use_real_terrain && terrain->srtm_reader) {
+    if (terrain->srtm_reader) {
         double n = 1000.0;  // 1km north
         double e = 2000.0;  // 2km east
         
