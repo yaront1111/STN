@@ -29,6 +29,9 @@ void UKF_Stable::init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_D
     nominal_state_ = x0;
     P_ = P0;
     enforcePositiveDefinite(P_);
+    
+    // Initialize sigma points
+    generateSigmaPoints();
 }
 
 void UKF_Stable::generateSigmaPoints() {
