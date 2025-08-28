@@ -126,11 +126,10 @@ void EKF::update_position(State& x, const Vector3d& z, const Matrix3d& R) {
 bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& terrain_grad) {
   if(!inited_) init(x);
   
-  // Configuration parameters - optimized for better accuracy
-  const double sigma_agl = 0.5;     // Radar altimeter noise (m) - reduced for better accuracy
-  const double nis_gate = 12.59;    // 99.5% gate for scalar measurement - more permissive
-  const double slope_floor = 0.01;  // Minimum slope for observability - more sensitive
-  const double alpha = 0.6;         // Soft update factor - increased for faster convergence
+  // Configuration parameters - optimized for outlier robustness
+  const double sigma_agl = 0.5;     // Radar altimeter noise (m)
+  const double nis_gate = 9.21;     // 99% gate for scalar measurement - tighter for outliers
+  const double slope_floor = 0.01;  // Minimum slope for observability
   
   // Predicted AGL: altitude - terrain_height
   double z_pred = (-x.p_NED.z()) - terrain_h;
@@ -147,6 +146,14 @@ bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& t
   // Measurement noise variance (inflate when terrain is flat)
   double slope = std::max(terrain_grad.norm(), 1e-6);
   double R = sigma_agl * sigma_agl * (1.0 + std::pow(slope_floor / slope, 2.0));
+  
+  // Adaptive alpha based on innovation magnitude (Huber-like)
+  double innovation_ratio = std::abs(y) / (3.0 * std::sqrt(R));
+  double alpha = 0.6;  // Base update factor
+  if (innovation_ratio > 1.0) {
+    // Reduce gain for potential outliers
+    alpha *= 1.0 / (1.0 + innovation_ratio - 1.0);
+  }
   
   // Get position covariance block
   Matrix3d P_pos = P_.block<3,3>(0,0);
@@ -175,9 +182,11 @@ bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& t
   // Update the full covariance matrix
   P_.block<3,3>(0,0) = P_pos;
   
-  // Ensure covariance stays positive definite
+  // Ensure covariance stays positive definite with adaptive floor
+  // Increase minimum variance when we detect potential outliers
+  double min_variance = (nis > 6.0) ? 0.1 : 0.01;
   for(int i = 0; i < 3; i++) {
-    P_(i,i) = std::max(P_(i,i), 0.01);
+    P_(i,i) = std::max(P_(i,i), min_variance);
   }
   
   return true;

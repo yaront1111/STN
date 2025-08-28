@@ -41,8 +41,13 @@ inline bool trn_update_adaptive(
     Eigen::RowVector3d H;
     H << -terrain_grad.x(), -terrain_grad.y(), -1.0;
     
-    // Measurement variance
+    // Adaptive measurement variance based on terrain characteristics
     double R = cfg.sigma_agl * cfg.sigma_agl;
+    
+    // Increase measurement noise for very flat terrain (less observable)
+    if (slope < cfg.slope_thresh * 2) {
+        R *= (2.0 - slope / (cfg.slope_thresh * 2));
+    }
     
     // Innovation covariance
     double S = (H * P_pos * H.transpose())(0,0) + R;
@@ -61,24 +66,39 @@ inline bool trn_update_adaptive(
     double slope_factor = std::min(1.0, slope / 0.01);  // Full strength at 1% grade (was 15%)
     double alpha = cfg.alpha_base * (1.0 + (cfg.alpha_boost - 1.0) * slope_factor);
     
-    // AGL-rate consistency factor (if we have previous measurement)
+    // Enhanced velocity consistency check
     if (dt > 0 && dt < 1.0) {  // Valid time delta
         double rdot_pred = -v_NED.z() - (terrain_grad.x() * v_NED.x() + terrain_grad.y() * v_NED.y());
         double rdot_meas = (z_agl - z_agl_prev) / dt;
         double rdot_err = std::abs(rdot_meas - rdot_pred);
         
-        // Reduce alpha if AGL rate is inconsistent
-        double rate_factor = std::exp(-rdot_err / 10.0);  // Decay with 10 m/s scale
-        alpha *= rate_factor;
+        // Adaptive scaling based on velocity consistency
+        if (rdot_err > 5.0) {  // Large inconsistency
+            // Strong reduction for likely outliers
+            alpha *= std::exp(-rdot_err / 5.0);
+        } else if (rdot_err > 2.0) {
+            // Moderate reduction
+            alpha *= (1.0 - 0.3 * (rdot_err - 2.0) / 3.0);
+        }
+        // Small errors don't affect alpha
     }
     
     alpha = std::min(alpha, 0.8);  // Cap at 0.8
     if (alpha_out) *alpha_out = alpha;
     
-    // Huber robustification
+    // Enhanced Huber robustification with adaptive threshold
     double huber_weight = 1.0;
-    if (std::abs(y) > cfg.huber_c) {
-        huber_weight = cfg.huber_c / std::abs(y);
+    double adaptive_huber_c = cfg.huber_c;
+    
+    // Tighten Huber threshold for flat terrain (more prone to errors)
+    if (slope < 0.05) {
+        adaptive_huber_c *= 0.7;
+    }
+    
+    if (std::abs(y) > adaptive_huber_c) {
+        // Smooth Huber function for better continuity
+        double ratio = adaptive_huber_c / std::abs(y);
+        huber_weight = ratio * ratio;  // Quadratic taper
     }
     
     // Kalman gain

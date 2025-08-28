@@ -104,15 +104,15 @@ int main(int argc, char** argv) {
   int trn_rejected = 0;
   int trn_no_radalt = 0;
   
-  // Adaptive TRN config - adjusted for very flat terrain
+  // Adaptive TRN config - balanced for accuracy and robustness
   TrnAdaptiveCfg trn_cfg;
-  trn_cfg.sigma_agl = 0.5;        // Trust radar altimeter
-  trn_cfg.nis_gate = 25.0;        // Very permissive gate for flat terrain
-  trn_cfg.slope_thresh = 0.002;   // Extremely low threshold for flat SRTM terrain (0.2%)
-  trn_cfg.alpha_base = 0.1;       // Strong base update for flat terrain
-  trn_cfg.alpha_boost = 1.2;      // Small boost since slopes are minimal
-  trn_cfg.huber_c = 3.0;          // Less outlier rejection
-  trn_cfg.max_step = 2.0;         // Allow larger corrections
+  trn_cfg.sigma_agl = 0.7;        // Realistic radar altimeter noise
+  trn_cfg.nis_gate = 16.0;        // Chi-squared 99.9% for scalar
+  trn_cfg.slope_thresh = 0.003;   // Threshold for terrain observability
+  trn_cfg.alpha_base = 0.05;      // Conservative base update
+  trn_cfg.alpha_boost = 1.5;      // Moderate boost for slopes
+  trn_cfg.huber_c = 2.0;          // Balanced outlier rejection
+  trn_cfg.max_step = 1.5;         // Reasonable step limit
   
   // Enable full-state updates for bias estimation
   const bool USE_FULLSTATE_UPDATE = false;  // Disabled - needs better observability
@@ -203,16 +203,24 @@ int main(int argc, char** argv) {
       // Get terrain at current estimate
       auto ts = terrain.sample(x.p_NED.x(), x.p_NED.y());
       
-      // Velocity consistency check (pre-gate)
+      // Enhanced velocity consistency check
       const double rdot_pred = -x.v_NED.z() - (ts.grad.x()*x.v_NED.x() + ts.grad.y()*x.v_NED.y());
       bool vel_consistent = true;
-      if (has_prev_agl && (x.t - t_agl_prev) > 0) {
+      double consistency_score = 1.0;
+      
+      if (has_prev_agl && (x.t - t_agl_prev) > 0 && (x.t - t_agl_prev) < 1.0) {
         double rdot_meas = (z_agl - z_agl_prev) / (x.t - t_agl_prev);
         double rdot_err = std::abs(rdot_meas - rdot_pred);
-        // Very soft gate: only reject physically impossible changes
-        if (rdot_err > 100.0) {  // Very lenient - accept almost everything
+        
+        // Multi-level consistency check
+        if (rdot_err > 20.0) {  // Clearly wrong
           vel_consistent = false;
+        } else if (rdot_err > 10.0) {  // Suspicious
+          consistency_score = 0.3;
+        } else if (rdot_err > 5.0) {  // Questionable
+          consistency_score = 0.6;
         }
+        // Good measurements (rdot_err < 5) keep score = 1.0
       }
       
       if (USE_ADAPTIVE_TRN && vel_consistent) {
@@ -238,10 +246,17 @@ int main(int argc, char** argv) {
           Eigen::Vector3d p_local = x.p_NED;
           Eigen::Matrix3d P_local = ekf.get_P_pos();
           
+          // Apply consistency score to TRN config
+          TrnAdaptiveCfg trn_cfg_local = trn_cfg;
+          if (consistency_score < 1.0) {
+            trn_cfg_local.alpha_base *= consistency_score;
+            trn_cfg_local.huber_c *= (0.5 + 0.5 * consistency_score);
+          }
+          
           accepted = trn_update_adaptive(
               p_local, P_local, x.v_NED,
               z_agl, ts.h, ts.grad,
-              trn_cfg, &nis, &alpha,
+              trn_cfg_local, &nis, &alpha,
               has_prev_agl ? z_agl_prev : z_agl,
               has_prev_agl ? (x.t - t_agl_prev) : 0.0
           );
