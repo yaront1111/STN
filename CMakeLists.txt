@@ -1,83 +1,144 @@
-cmake_minimum_required(VERSION 3.10)
-project(STN)
+cmake_minimum_required(VERSION 3.14)
+project(GravitySTN VERSION 2.0.0)
+
+# GRAVITY-PRIMARY NAVIGATION SYSTEM
+# All TRN code has been removed
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -Wall -Wextra")
 
-# Options
-option(BUILD_TESTS "Build unit tests" ON)
-option(BUILD_BENCHMARKS "Build performance benchmarks" OFF)
-
-# Find Eigen3
+# Find required packages
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+find_package(Threads REQUIRED)
 
-# Core library sources
-set(CORE_SOURCES
-    cpp/core/ins.cpp
-    cpp/core/ekf.cpp
+# Optional packages
+find_package(GTSAM QUIET)
+find_package(OpenMP QUIET)
+
+if(OpenMP_FOUND)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+    message(STATUS "OpenMP found - parallel processing enabled")
+endif()
+
+# Core gravity navigation library
+add_library(gravity_core STATIC
+    cpp/core/ukf.cpp
     cpp/core/gravity_model.cpp
-    cpp/core/radalt_sampler.cpp
-    cpp/core/terrain_provider.cpp
+    cpp/core/gravity_anomaly.cpp
+    cpp/core/coordinate_transforms.cpp
+    cpp/core/config_reader.cpp
 )
 
-# Create core library for reuse
-add_library(stn_core STATIC ${CORE_SOURCES})
-target_include_directories(stn_core PUBLIC
+target_include_directories(gravity_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/core
-    ${CMAKE_CURRENT_SOURCE_DIR}/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/hardware
 )
-target_link_libraries(stn_core Eigen3::Eigen)
 
-# Main navigation executable
-add_executable(stn_navigator core/main.cpp)
-target_link_libraries(stn_navigator stn_core)
+target_link_libraries(gravity_core 
+    Eigen3::Eigen
+    Threads::Threads
+)
 
-# Compiler flags for optimization
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    target_compile_options(stn_navigator PRIVATE -O3 -march=native)
-    target_compile_options(stn_core PRIVATE -O3 -march=native)
+# Main gravity navigator executable
+add_executable(gravity_navigator
+    core/gravity_navigator.cpp
+)
+
+target_link_libraries(gravity_navigator
+    gravity_core
+)
+
+# Hardware interface library (optional)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cpp/hardware/hardware_interface.cpp")
+    add_library(hardware_interface STATIC
+        cpp/hardware/hardware_interface.cpp
+        cpp/hardware/vectornav_interface.cpp
+    )
+    target_link_libraries(hardware_interface gravity_core)
+    target_link_libraries(gravity_navigator hardware_interface)
 endif()
 
-# Unit tests
-if(BUILD_TESTS)
-    enable_testing()
-    
-    # Download and configure Google Test
-    include(FetchContent)
-    FetchContent_Declare(
-        googletest
-        GIT_REPOSITORY https://github.com/google/googletest.git
-        GIT_TAG release-1.12.1
+# Factor graph optimization (optional)
+if(GTSAM_FOUND)
+    add_definitions(-DUSE_GTSAM)
+    add_library(factor_graph STATIC
+        cpp/core/factor_graph_optimizer.cpp
     )
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
-    
-    # Test sources
-    set(TEST_SOURCES
-        tests/test_main.cpp
-        tests/test_quaternion.cpp
-        tests/test_gravity.cpp
-        tests/test_ekf.cpp
-        tests/test_terrain.cpp
+    target_link_libraries(factor_graph 
+        gravity_core
+        gtsam
     )
-    
-    # Test executable
-    add_executable(stn_tests ${TEST_SOURCES})
-    target_link_libraries(stn_tests
-        stn_core
-        gtest_main
-        gmock
-    )
-    
-    # Add tests to CTest
-    include(GoogleTest)
-    gtest_discover_tests(stn_tests)
+    target_link_libraries(gravity_navigator factor_graph)
+    message(STATUS "GTSAM found - factor graph optimization enabled")
 endif()
+
+# Tests
+enable_testing()
+
+add_executable(test_gravity
+    tests/test_gravity_navigation.cpp
+)
+target_link_libraries(test_gravity gravity_core)
+add_test(NAME gravity_test COMMAND test_gravity)
 
 # Benchmarks
-if(BUILD_BENCHMARKS)
-    add_executable(stn_benchmark
-        benchmarks/bench_main.cpp
-    )
-    target_link_libraries(stn_benchmark stn_core)
-endif()
+add_executable(benchmark_ukf EXCLUDE_FROM_ALL
+    benchmarks/benchmark_ukf.cpp
+)
+target_link_libraries(benchmark_ukf gravity_core)
+
+# Tools
+add_executable(egm2020_converter EXCLUDE_FROM_ALL
+    tools/egm2020_converter.cpp
+)
+target_link_libraries(egm2020_converter gravity_core)
+
+# Installation
+install(TARGETS gravity_navigator
+    RUNTIME DESTINATION bin
+)
+
+install(DIRECTORY config/
+    DESTINATION share/gravity_stn/config
+)
+
+install(FILES 
+    README_GRAVITY.md
+    DESTINATION share/gravity_stn
+)
+
+# Create systemd service file
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/gravity_navigator.service.in
+    ${CMAKE_CURRENT_BINARY_DIR}/gravity_navigator.service
+    @ONLY
+)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/gravity_navigator.service
+    DESTINATION lib/systemd/system
+)
+
+# Package configuration
+set(CPACK_GENERATOR "DEB;RPM;TGZ")
+set(CPACK_PACKAGE_NAME "gravity-stn")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_DESCRIPTION "Gravity-Primary Spacetime Navigation System")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libeigen3-dev (>= 3.3)")
+set(CPACK_RPM_PACKAGE_REQUIRES "eigen3-devel >= 3.3")
+include(CPack)
+
+# Print configuration
+message(STATUS "")
+message(STATUS "====================================")
+message(STATUS "  GRAVITY-PRIMARY STN v${PROJECT_VERSION}")
+message(STATUS "====================================")
+message(STATUS "  Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "  Compiler: ${CMAKE_CXX_COMPILER}")
+message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
+message(STATUS "  OpenMP: ${OpenMP_FOUND}")
+message(STATUS "  GTSAM: ${GTSAM_FOUND}")
+message(STATUS "====================================")
+message(STATUS "  TRN Status: COMPLETELY REMOVED")
+message(STATUS "====================================")
+message(STATUS "")
