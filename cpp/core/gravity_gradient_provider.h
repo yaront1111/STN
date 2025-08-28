@@ -9,7 +9,7 @@
  * EGM2020 Gravity Gradient Provider
  * The core of gravity-primary navigation
  * 
- * Replaces terrain_provider.h completely
+ * Primary sensor interface for spacetime navigation
  */
 class GravityGradientProvider {
 public:

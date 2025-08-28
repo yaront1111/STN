@@ -99,7 +99,11 @@ struct GravityAnomaly {
 struct CSACMeasurement {
     double offset_s;               // Time offset from GPS (seconds)
     double drift_ppm;              // Drift rate (parts per million)
-    double allan_dev;              // Allan deviation at 1s
+    double allan_deviation;        // Allan deviation at 1s
     double temperature_c;          // Temperature (Celsius)
     double t;                      // Timestamp
+    
+    CSACMeasurement() : 
+        offset_s(0.0), drift_ppm(0.0), allan_deviation(1e-13),
+        temperature_c(25.0), t(0.0) {}
 };

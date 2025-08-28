@@ -23,11 +23,10 @@ endif()
 
 # Core gravity navigation library
 add_library(gravity_core STATIC
+    cpp/core/types.cpp
     cpp/core/ukf.cpp
     cpp/core/gravity_model.cpp
-    cpp/core/gravity_anomaly.cpp
-    cpp/core/coordinate_transforms.cpp
-    cpp/core/config_reader.cpp
+    cpp/core/gravity_gradient_provider.cpp
 )
 
 target_include_directories(gravity_core PUBLIC
@@ -73,26 +72,10 @@ if(GTSAM_FOUND)
     message(STATUS "GTSAM found - factor graph optimization enabled")
 endif()
 
-# Tests
+# Tests (optional - create later)
 enable_testing()
 
-add_executable(test_gravity
-    tests/test_gravity_navigation.cpp
-)
-target_link_libraries(test_gravity gravity_core)
-add_test(NAME gravity_test COMMAND test_gravity)
-
-# Benchmarks
-add_executable(benchmark_ukf EXCLUDE_FROM_ALL
-    benchmarks/benchmark_ukf.cpp
-)
-target_link_libraries(benchmark_ukf gravity_core)
-
-# Tools
-add_executable(egm2020_converter EXCLUDE_FROM_ALL
-    tools/egm2020_converter.cpp
-)
-target_link_libraries(egm2020_converter gravity_core)
+# Benchmarks and tools - to be created later
 
 # Installation
 install(TARGETS gravity_navigator
@@ -108,16 +91,7 @@ install(FILES
     DESTINATION share/gravity_stn
 )
 
-# Create systemd service file
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/gravity_navigator.service.in
-    ${CMAKE_CURRENT_BINARY_DIR}/gravity_navigator.service
-    @ONLY
-)
-
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/gravity_navigator.service
-    DESTINATION lib/systemd/system
-)
+# Systemd service - to be created later
 
 # Package configuration
 set(CPACK_GENERATOR "DEB;RPM;TGZ")

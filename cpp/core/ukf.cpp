@@ -170,8 +170,8 @@ Eigen::Matrix3d UKF::computeGradientFromPosition(const Eigen::Vector3d& pos_ECEF
     // Simplified - in production would use proper WGS84 conversion
     double r = pos_ECEF.norm();
     double lat = std::asin(pos_ECEF.z() / r);
-    double lon = std::atan2(pos_ECEF.y(), pos_ECEF.x());
-    double alt = r - 6371000.0;  // Simplified Earth radius
+    // double lon = std::atan2(pos_ECEF.y(), pos_ECEF.x());  // Not used yet
+    // double alt = r - 6371000.0;  // Not used yet
     
     // Compute gravity gradient from EGM2020 model
     // For now, return a synthetic gradient for testing
@@ -206,12 +206,6 @@ void UKF::updateGravityGradient(const Eigen::Matrix3d& measured_gradient,
         Eigen::VectorXd v(9);
         v << m(0,0), m(0,1), m(0,2), m(1,0), m(1,1), m(1,2), m(2,0), m(2,1), m(2,2);
         return v;
-    };
-    
-    auto unflatten = [](const Eigen::VectorXd& v) {
-        Eigen::Matrix3d m;
-        m << v(0), v(1), v(2), v(3), v(4), v(5), v(6), v(7), v(8);
-        return m;
     };
     
     // Compute innovation covariance
@@ -296,6 +290,84 @@ void UKF::updateGravityAnomaly(double measured_anomaly, double anomaly_noise) {
     
     // Update covariance
     P_ = P_ - K * Pxy.transpose();
+    
+    // Ensure positive definiteness
+    P_ = (P_ + P_.transpose()) / 2.0;
+}
+
+void UKF::propagateWithIMU(const ImuSample& imu, double dt) {
+    // First predict with dynamics
+    predict(dt);
+    
+    // Then update state with IMU measurements
+    // This is simplified - in production would have full IMU mechanization
+    State& x = x_;
+    
+    // Remove bias from measurements
+    Eigen::Vector3d acc_corrected = imu.acc_mps2 - x.b_a;
+    Eigen::Vector3d gyro_corrected = imu.gyro_rps - x.b_g;
+    
+    // Update velocity (simplified - ignores gravity and Coriolis)
+    x.v_ECEF += x.q_ECEF_B * acc_corrected * dt;
+    
+    // Update attitude
+    Eigen::Vector3d angle_increment = gyro_corrected * dt;
+    double angle = angle_increment.norm();
+    if (angle > 1e-10) {
+        Eigen::Quaterniond dq(Eigen::AngleAxisd(angle, angle_increment / angle));
+        x.q_ECEF_B = x.q_ECEF_B * dq;
+        x.q_ECEF_B.normalize();
+    }
+    
+    // Update time
+    x.t = imu.t;
+}
+
+void UKF::updateClock(double offset_s, double drift_ppm) {
+    // Simple scalar update for clock states
+    // Measurement model: z = [dt, df]
+    
+    // Predicted measurements from sigma points
+    std::vector<Eigen::Vector2d> predicted_clock(SIGMA_POINTS);
+    for (int i = 0; i < SIGMA_POINTS; ++i) {
+        predicted_clock[i] << sigma_points_[i].dt, sigma_points_[i].df;
+    }
+    
+    // Compute mean predicted measurement
+    Eigen::Vector2d mean_clock = Eigen::Vector2d::Zero();
+    for (int i = 0; i < SIGMA_POINTS; ++i) {
+        mean_clock += weights_mean_(i) * predicted_clock[i];
+    }
+    
+    // Compute covariances
+    Eigen::Matrix2d Pyy = Eigen::Matrix2d::Zero();
+    Eigen::Matrix<double, STATE_DIM, 2> Pxy = Eigen::Matrix<double, STATE_DIM, 2>::Zero();
+    
+    Eigen::VectorXd x_mean = stateToVector(x_);
+    
+    for (int i = 0; i < SIGMA_POINTS; ++i) {
+        Eigen::Vector2d clock_diff = predicted_clock[i] - mean_clock;
+        Eigen::VectorXd state_diff = stateToVector(sigma_points_[i]) - x_mean;
+        
+        Pyy += weights_cov_(i) * clock_diff * clock_diff.transpose();
+        Pxy += weights_cov_(i) * state_diff * clock_diff.transpose();
+    }
+    
+    // Add measurement noise
+    Pyy(0,0) += 1e-18;  // Clock offset noise (s²)
+    Pyy(1,1) += 1e-24;  // Clock drift noise ((s/s)²)
+    
+    // Kalman gain
+    Eigen::Matrix<double, STATE_DIM, 2> K = Pxy * Pyy.inverse();
+    
+    // Update state
+    Eigen::Vector2d innovation;
+    innovation << offset_s - mean_clock(0), drift_ppm * 1e-6 - mean_clock(1);
+    Eigen::VectorXd x_updated = x_mean + K * innovation;
+    x_ = vectorToState(x_updated);
+    
+    // Update covariance
+    P_ = P_ - K * Pyy * K.transpose();
     
     // Ensure positive definiteness
     P_ = (P_ + P_.transpose()) / 2.0;
