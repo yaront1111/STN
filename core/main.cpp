@@ -69,13 +69,27 @@ int main(int argc, char** argv) {
   grav_anomaly.loadEGM2008("data/egm2008.dat");  // Will use synthetic if file not found
   
   // Configure Singer model for realistic vehicle dynamics
-  // Increased noise to account for modeling errors
-  ekf.setSingerParams(1.0, 30.0);  // 1.0 m/s² accel noise, 30s correlation time
+  // Tuned for aircraft: moderate accelerations with long correlation
+  // Lower sigma = less expected acceleration = tighter coasting
+  // Longer tau = smoother trajectories = better prediction
+  ekf.setSingerParams(0.5, 60.0);  // 0.5 m/s² accel noise, 60s correlation for steady flight
   
-  // Initialize state to match truth initial conditions
-  // Flying at 1350m MSL (1000m AGL over 350m terrain)
-  x.p_NED = Eigen::Vector3d(0.5, 0.0, -1350.0);   // Start at 1350m MSL
+  // TRN setup - always uses real SRTM terrain (need this before altitude init)
+  TerrainProvider terrain;
+  
+  // Initialize state - will refine altitude with first radar measurement
+  x.p_NED = Eigen::Vector3d(0.5, 0.0, -1500.0);   // Initial guess
   x.v_NED = Eigen::Vector3d(50.0, 0.0, 0.0);      // 50 m/s north velocity
+  
+  // Use first radar measurement to set correct altitude
+  if (rad.Z.size() > 0) {
+    double first_agl = rad.Z[0];  // First AGL measurement in meters
+    TerrainSample tsamp = terrain.sample(x.p_NED.x(), x.p_NED.y());
+    double init_alt_msl = tsamp.h + first_agl;
+    x.p_NED.z() = -init_alt_msl;
+    std::cout << "Initialized altitude from radar: " << init_alt_msl << "m MSL (terrain: " 
+              << tsamp.h << "m, AGL: " << first_agl << "m)\n";
+  }
   
   // Initialize quaternion to map from body to NED
   // The simulator says "body aligned with NED" so we use identity
@@ -86,8 +100,6 @@ int main(int argc, char** argv) {
   
   ekf.init(x);
   
-  // TRN setup - always uses real SRTM terrain
-  TerrainProvider terrain;
   const bool USE_TRN = config.getBool("trn.enabled", true);
   const bool USE_ADAPTIVE_TRN = true;  // Always use adaptive
   const bool USE_SCALAR_AGL = false;  // Deprecated
@@ -104,11 +116,11 @@ int main(int argc, char** argv) {
   TrnAdaptiveCfg trn_cfg;
   trn_cfg.sigma_agl = 0.5;        // Reduced noise for cleaner synthetic data
   trn_cfg.nis_gate = 12.59;       // Chi-squared 99.5% for scalar (more permissive)
-  trn_cfg.slope_thresh = 0.002;   // Low threshold for flat terrain (0.2% grade)
-  trn_cfg.alpha_base = 0.15;      // Aggressive initial learning rate
+  trn_cfg.slope_thresh = 0.02;    // Require 2% slope - based on actual terrain statistics
+  trn_cfg.alpha_base = 0.5;       // Very aggressive learning rate for large residuals
   trn_cfg.alpha_boost = 2.0;      // Strong boost for high slopes
-  trn_cfg.huber_c = 2.5;          // Less aggressive outlier rejection
-  trn_cfg.max_step = 1.0;         // Allow reasonable corrections
+  trn_cfg.huber_c = 10.0;         // Much less aggressive outlier rejection
+  trn_cfg.max_step = 10.0;        // Allow large corrections for big errors
   
   // Enable full-state updates for bias estimation
   const bool USE_FULLSTATE_UPDATE = false;  // Disabled - needs better observability
@@ -149,9 +161,10 @@ int main(int argc, char** argv) {
     if (++grav_update_counter % 20 == 0) {  // 200Hz/20 = 10Hz (was 2Hz)
       ekf.update_gravity(x, f_N_z_filt);
       
-      // --- NEW: Gravity Anomaly Update (Spacetime Navigation) ---
+      // --- Spacetime Navigation: Gravity Anomaly Position Update ---
+      // This provides terrain-independent position corrections!
+      
       // Get current position in lat/lon for gravity lookup
-      // Using Zurich reference to match terrain data
       const double ref_lat = 47.4;  // Zurich latitude (degrees)
       const double ref_lon = 8.5;   // Zurich longitude (degrees)
       const double lat_to_m = 111320.0;
@@ -161,15 +174,42 @@ int main(int argc, char** argv) {
       double lon = ref_lon + x.p_NED.y() / lon_to_m;
       double alt = -x.p_NED.z();
       
-      // Get gravity anomaly at current position
-      double g_anomaly = grav_anomaly.getAnomaly(lat, lon);
+      // Get predicted gravity anomaly at current position
+      double g_anomaly_pred = grav_anomaly.getAnomaly(lat, lon);
       
-      // Could implement anomaly-based position update here
-      // For now, just log the anomaly for analysis
-      static int anomaly_log_counter = 0;
-      if (++anomaly_log_counter % 100 == 0) {  // Log every second
-        std::cout << "Gravity anomaly at (" << lat << ", " << lon 
-                  << ", " << alt << "m): " << g_anomaly*1e5 << " mGal\n";
+      // Get measured gravity anomaly from accelerometer
+      // In steady flight, vertical specific force = -gravity
+      // The anomaly is the difference from normal gravity
+      double g_normal = 9.80665;  // Standard gravity at Zurich
+      double g_measured = -f_N_z_filt.y;  // Filtered vertical specific force
+      double g_anomaly_meas = (g_measured - g_normal) * 1e5;  // Convert to mGal
+      
+      // Get gravity anomaly gradient for Jacobian
+      auto grad = grav_anomaly.getGradient(lat, lon);
+      
+      // Convert gradient from per-degree to per-meter in NED
+      Eigen::Vector2d anomaly_gradient_ned;
+      anomaly_gradient_ned.x() = grad.dgdlat * 1e5 / lat_to_m;  // mGal/meter north
+      anomaly_gradient_ned.y() = grad.dgdlon * 1e5 / lon_to_m;  // mGal/meter east
+      
+      // Perform EKF update if gradient is meaningful
+      if (anomaly_gradient_ned.norm() > 1e-6) {
+        bool anomaly_accepted = ekf.update_gravity_anomaly(
+          x, g_anomaly_meas, g_anomaly_pred * 1e5, anomaly_gradient_ned
+        );
+        
+        static int anomaly_update_counter = 0;
+        static int anomaly_accept_counter = 0;
+        anomaly_update_counter++;
+        if (anomaly_accepted) anomaly_accept_counter++;
+        
+        // Log periodically
+        if (anomaly_update_counter % 100 == 0) {
+          std::cout << "Gravity anomaly updates: " << anomaly_accept_counter 
+                    << "/" << anomaly_update_counter 
+                    << " (measured: " << g_anomaly_meas 
+                    << " mGal, predicted: " << g_anomaly_pred * 1e5 << " mGal)\n";
+        }
       }
     }
 

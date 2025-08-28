@@ -310,3 +310,85 @@ void EKF::update_gravity(State& x, const IIR1& f_N_z) {
   // Ensure positive definite
   P_pos_(2,2) = std::max(P_pos_(2,2), 0.01);
 }
+
+bool EKF::update_gravity_anomaly(State& x, double measured_anomaly, double predicted_anomaly,
+                                 const Eigen::Vector2d& anomaly_gradient) {
+  /**
+   * Gravity Anomaly Position Update
+   * 
+   * Uses the difference between measured and predicted gravity anomalies
+   * to correct horizontal position. This works even over flat terrain!
+   * 
+   * @param measured_anomaly: From accelerometer (mGal)
+   * @param predicted_anomaly: From EGM2008 at current position (mGal)
+   * @param anomaly_gradient: [∂g/∂north, ∂g/∂east] (mGal/meter)
+   */
+  
+  if (!inited_) return false;
+  
+  // Convert mGal to m/s²: 1 mGal = 1e-5 m/s²
+  const double mgal_to_mps2 = 1e-5;
+  
+  // Innovation (residual)
+  double y = (measured_anomaly - predicted_anomaly) * mgal_to_mps2;
+  
+  // Only proceed if we have meaningful gradient
+  double grad_magnitude = anomaly_gradient.norm();
+  if (grad_magnitude < 1e-6) {  // Gradient too small
+    return false;
+  }
+  
+  // Measurement Jacobian H = [∂g/∂pn, ∂g/∂pe, 0]
+  // Gradient is how anomaly changes with position
+  Eigen::RowVector3d H;
+  H << anomaly_gradient.x() * mgal_to_mps2, 
+       anomaly_gradient.y() * mgal_to_mps2, 
+       0.0;  // No vertical component
+  
+  // Extract position covariance
+  Eigen::Matrix3d P_pos = P_.block<3,3>(0,0);
+  
+  // Measurement noise - tuned based on accelerometer quality
+  // and expected modeling errors in EGM2008
+  double R = 1e-10;  // (m/s²)² - very low noise for gravity
+  
+  // Adapt R based on gradient magnitude
+  // Weak gradients are less reliable
+  if (grad_magnitude < 5e-5) {  // Very weak gradient
+    R *= 100.0;
+  } else if (grad_magnitude < 1e-4) {
+    R *= 10.0;
+  }
+  
+  // Innovation covariance
+  double S = (H * P_pos * H.transpose())(0,0) + R;
+  
+  // Normalized Innovation Squared (NIS) for consistency check
+  double nis = (y * y) / S;
+  
+  // Gate check - reject outliers
+  const double nis_gate = 12.59;  // 99.5% confidence
+  if (nis > nis_gate) {
+    return false;
+  }
+  
+  // Kalman gain
+  Eigen::Vector3d K = (P_pos * H.transpose()) / S;
+  
+  // State update - full position vector
+  x.p_NED += K * y;
+  
+  // Covariance update (Joseph form for stability)
+  Eigen::Matrix3d I_KH = Eigen::Matrix3d::Identity() - K * H;
+  P_pos = I_KH * P_pos * I_KH.transpose() + K * R * K.transpose();
+  
+  // Store back to full covariance
+  P_.block<3,3>(0,0) = P_pos;
+  
+  // Ensure positive definite
+  for (int i = 0; i < 3; i++) {
+    P_(i,i) = std::max(P_(i,i), 0.01);
+  }
+  
+  return true;
+}

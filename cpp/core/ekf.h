@@ -9,7 +9,9 @@ public:
   void update_position(State& x, const Eigen::Vector3d& z_pos_NED, const Eigen::Matrix3d& R);
   bool update_agl(State& x, double z_agl, double terrain_h, const Eigen::Vector2d& terrain_grad);
   bool update_agl_fullstate(State& x, double z_agl, double terrain_h, const Eigen::Vector2d& terrain_grad);
-  void update_gravity(State& x, const IIR1& f_N_z);  // New gravity update method
+  void update_gravity(State& x, const IIR1& f_N_z);  // Existing gravity vector update
+  bool update_gravity_anomaly(State& x, double measured_anomaly, double predicted_anomaly, 
+                              const Eigen::Vector2d& anomaly_gradient);  // NEW: Gravity anomaly position update
   
   // Accessors for adaptive TRN
   Eigen::Matrix3d get_P_pos() const { return P_.block<3,3>(0,0); }

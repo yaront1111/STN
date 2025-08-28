@@ -32,21 +32,37 @@ inline bool trn_update_adaptive(
     // Slope magnitude
     double slope = terrain_grad.norm();
     
-    // Reject flat terrain
-    if (slope < cfg.slope_thresh) {
-        return false;
-    }
+    // Don't reject flat terrain - use it with appropriate weighting
+    // Remove hard threshold to allow all terrain to contribute
     
     // Measurement Jacobian: H = [∂AGL/∂pn, ∂AGL/∂pe, ∂AGL/∂pd]
     Eigen::RowVector3d H;
     H << -terrain_grad.x(), -terrain_grad.y(), -1.0;
     
-    // Adaptive measurement variance based on terrain characteristics
-    double R = cfg.sigma_agl * cfg.sigma_agl;
+    // Dynamic measurement variance based on terrain observability
+    double base_R = cfg.sigma_agl * cfg.sigma_agl;
     
-    // Increase measurement noise for very flat terrain (less observable)
-    if (slope < cfg.slope_thresh * 2) {
-        R *= (2.0 - slope / (cfg.slope_thresh * 2));
+    // Exponentially inflate noise for flat terrain
+    // This provides smooth degradation rather than hard cutoff
+    const double slope_optimal = 0.1;  // 10% slope is optimal
+    const double slope_floor = 0.002;  // Below 0.2% is nearly unobservable
+    
+    double R;
+    if (slope < slope_floor) {
+        // Extremely flat - essentially no horizontal information
+        R = base_R * 10000.0;  // Massive inflation
+    } else if (slope < cfg.slope_thresh) {
+        // Sub-threshold but not completely flat
+        // Exponential inflation based on how far below threshold
+        double inflation = std::pow(cfg.slope_thresh / slope, 3.0);
+        R = base_R * std::min(inflation, 1000.0);
+    } else if (slope < slope_optimal) {
+        // Above threshold but below optimal - mild inflation
+        double inflation = 1.0 + 2.0 * (slope_optimal - slope) / slope_optimal;
+        R = base_R * inflation;
+    } else {
+        // Optimal terrain - use base noise
+        R = base_R;
     }
     
     // Innovation covariance
