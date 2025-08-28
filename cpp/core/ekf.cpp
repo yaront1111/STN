@@ -90,36 +90,43 @@ Eigen::Matrix<double, 6, 6> EKF::computeSingerQ(double dt) const {
 void EKF::update_position(State& x, const Vector3d& z, const Matrix3d& R) {
   if(!inited_) init(x);
   
+  // Get position covariance block
+  Matrix3d P_pos = P_.block<3,3>(0,0);
+  
   // Innovation
   Vector3d r = z - x.p_NED;
   
   // Innovation covariance: S = P + R
-  Matrix3d S = P_pos_ + R;
+  Matrix3d S = P_pos + R;
   
   // Kalman gain: K = P * S^-1
   // For numerical stability, only compute for axes with reasonable R
   Matrix3d K = Matrix3d::Zero();
   for(int i = 0; i < 3; i++) {
     if(R(i,i) < 1e10) {  // Only update if measurement is valid
-      K(i,i) = P_pos_(i,i) / S(i,i);
+      K(i,i) = P_pos(i,i) / S(i,i);
     }
   }
   
   // State update
   x.p_NED += K * r;
   
-  // Covariance update: P = (I - K) * P
-  P_pos_ = (Matrix3d::Identity() - K) * P_pos_;
+  // Covariance update using Joseph form for stability
+  Matrix3d I_K = Matrix3d::Identity() - K;
+  P_pos = I_K * P_pos * I_K.transpose() + K * R * K.transpose();
+  
+  // Update the full covariance matrix
+  P_.block<3,3>(0,0) = P_pos;
 }
 
 bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& terrain_grad) {
   if(!inited_) init(x);
   
-  // Configuration parameters
-  const double sigma_agl = 0.7;     // Radar altimeter noise (m)
-  const double nis_gate = 9.21;     // 97.5% gate for scalar measurement
-  const double slope_floor = 0.02;  // Minimum slope for observability
-  const double alpha = 0.3;         // Soft update factor
+  // Configuration parameters - optimized for better accuracy
+  const double sigma_agl = 0.5;     // Radar altimeter noise (m) - reduced for better accuracy
+  const double nis_gate = 12.59;    // 99.5% gate for scalar measurement - more permissive
+  const double slope_floor = 0.01;  // Minimum slope for observability - more sensitive
+  const double alpha = 0.6;         // Soft update factor - increased for faster convergence
   
   // Predicted AGL: altitude - terrain_height
   double z_pred = (-x.p_NED.z()) - terrain_h;
@@ -137,8 +144,11 @@ bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& t
   double slope = std::max(terrain_grad.norm(), 1e-6);
   double R = sigma_agl * sigma_agl * (1.0 + std::pow(slope_floor / slope, 2.0));
   
+  // Get position covariance block
+  Matrix3d P_pos = P_.block<3,3>(0,0);
+  
   // Innovation covariance: S = H*P*H' + R
-  double S = (H * P_pos_ * H.transpose())(0,0) + R;
+  double S = (H * P_pos * H.transpose())(0,0) + R;
   
   // Normalized innovation squared (scalar NIS)
   double nis = (y * y) / S;
@@ -149,17 +159,21 @@ bool EKF::update_agl(State& x, double z_agl, double terrain_h, const Vector2d& t
   }
   
   // Kalman gain: K = P*H'/S
-  Vector3d K = (P_pos_ * H.transpose()) / S;
+  Vector3d K = (P_pos * H.transpose()) / S;
   
   // State update with soft factor
   x.p_NED += alpha * K * y;
   
-  // Covariance update
-  P_pos_ = (Matrix3d::Identity() - alpha * K * H) * P_pos_;
+  // Covariance update using Joseph form for numerical stability
+  Matrix3d I_KH = Matrix3d::Identity() - alpha * K * H;
+  P_pos = I_KH * P_pos * I_KH.transpose() + alpha * alpha * K * R * K.transpose();
+  
+  // Update the full covariance matrix
+  P_.block<3,3>(0,0) = P_pos;
   
   // Ensure covariance stays positive definite
   for(int i = 0; i < 3; i++) {
-    P_pos_(i,i) = std::max(P_pos_(i,i), 0.01);
+    P_(i,i) = std::max(P_(i,i), 0.01);
   }
   
   return true;
