@@ -49,21 +49,19 @@ int main(int argc, char** argv) {
     GravityGradientProvider gravity_provider;
     gravity_provider.loadEGM2020("data/egm2020/coefficients.dat");
     
-    // Initialize UKF
-    std::cout << "Initializing UKF...\n";
+    // Initialize stable UKF with error-state formulation
+    std::cout << "Initializing Stable UKF...\n";
     UKF::Config ukf_config;
-    ukf_config.alpha = 1e-3;
-    ukf_config.beta = 2.0;
-    ukf_config.kappa = 0.0;
+    ukf_config.alpha = 0.01;      // Spread of sigma points
+    ukf_config.beta = 2.0;        // Gaussian prior
+    ukf_config.kappa = 3 - 15;    // Standard for 15D error state
     
     // Tune process noise for aircraft dynamics
-    ukf_config.q_pos = 1.0;      // Higher for aircraft
-    ukf_config.q_vel = 10.0;     // Much higher for maneuvers
-    ukf_config.q_att = 0.01;     // Higher for banking
-    ukf_config.q_acc_bias = 1e-5;
-    ukf_config.q_gyro_bias = 1e-6;
-    ukf_config.q_clock_offset = 1e-8;
-    ukf_config.q_clock_drift = 1e-11;
+    ukf_config.sigma_pos = 1.0;   // m (higher for aircraft)
+    ukf_config.sigma_vel = 5.0;   // m/s (much higher for maneuvers)
+    ukf_config.sigma_att = 0.05;  // rad (higher for banking)
+    ukf_config.sigma_ba = 1e-3;   // m/s² bias drift
+    ukf_config.sigma_bg = 1e-4;   // rad/s bias drift
     
     UKF ukf(ukf_config);
     
@@ -74,16 +72,14 @@ int main(int argc, char** argv) {
                     true_start.y() * M_PI / 180.0,
                     true_start.z());
     
-    // Initial covariance
-    Eigen::Matrix<double, UKF::STATE_DIM, UKF::STATE_DIM> P0 = 
-        Eigen::Matrix<double, UKF::STATE_DIM, UKF::STATE_DIM>::Identity();
-    P0.block<3,3>(0,0) *= 10.0;     // Position: 3m uncertainty
-    P0.block<3,3>(3,3) *= 1.0;      // Velocity: 1 m/s
+    // Initial covariance (15D error state)
+    Eigen::Matrix<double, UKF::ERROR_STATE_DIM, UKF::ERROR_STATE_DIM> P0 = 
+        Eigen::Matrix<double, UKF::ERROR_STATE_DIM, UKF::ERROR_STATE_DIM>::Identity();
+    P0.block<3,3>(0,0) *= 100.0;    // Position: 10m uncertainty
+    P0.block<3,3>(3,3) *= 4.0;      // Velocity: 2 m/s
     P0.block<3,3>(6,6) *= 0.01;     // Attitude: 0.1 rad
-    P0.block<3,3>(10,10) *= 0.01;   // Acc bias
-    P0.block<3,3>(13,13) *= 0.001;  // Gyro bias
-    P0(16,16) = 1e-6;
-    P0(17,17) = 1e-9;
+    P0.block<3,3>(9,9) *= 1e-4;     // Acc bias
+    P0.block<3,3>(12,12) *= 1e-6;   // Gyro bias
     
     ukf.init(x0, P0);
     std::cout << "Initial position: " << true_start.x() << "°N, " 
@@ -120,13 +116,13 @@ int main(int argc, char** argv) {
         }
         
         // Propagate UKF with IMU
-        ukf.propagateWithIMU(imu, dt);
+        ukf.predict(imu, dt);
         
         // Update with gravity gradient (at 1 Hz)
         if (i % 100 == 0 && i > 0) {
             GravityGradientTensor gradient = data_reader.getGradient(i);
             if (gradient.isValid()) {
-                ukf.updateGravityGradient(gradient.T, gradient.R);
+                ukf.updateGradient(gradient.T, gradient.R);
                 gradient_updates++;
             }
         }
@@ -134,7 +130,7 @@ int main(int argc, char** argv) {
         // Update with gravity anomaly (at 10 Hz)
         if (i % 10 == 0 && i > 100) {
             double anomaly = data_reader.getAnomaly(i);
-            ukf.updateGravityAnomaly(anomaly, 0.5);  // 0.5 mGal noise
+            ukf.updateAnomaly(anomaly, 0.5*0.5);  // 0.5 mGal noise (variance)
             anomaly_updates++;
         }
         

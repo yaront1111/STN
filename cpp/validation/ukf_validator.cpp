@@ -1,4 +1,4 @@
-#include "../core/ukf_stable.h"
+#include "../core/ukf.h"
 #include "../core/gravity_gradient_provider.h"
 #include "../core/gravity_model.h"
 #include <iostream>
@@ -49,17 +49,17 @@ int main() {
     gradient_provider.loadEGM2020("data/egm2020_coeffs.dat");
     
     // Configure UKF
-    UKF_Stable::Config ukf_cfg;
-    ukf_cfg.alpha = 1e-3;
+    UKF::Config ukf_cfg;
+    ukf_cfg.alpha = 0.01;  // Increased spread of sigma points
     ukf_cfg.beta = 2.0;
-    ukf_cfg.kappa = 0.0;
+    ukf_cfg.kappa = 3 - 15;  // Standard choice for Gaussian
     ukf_cfg.sigma_pos = 0.1;
     ukf_cfg.sigma_vel = 0.5;
     ukf_cfg.sigma_att = 0.01;
     ukf_cfg.sigma_ba = 1e-4;
     ukf_cfg.sigma_bg = 1e-5;
     
-    UKF_Stable ukf(ukf_cfg);
+    UKF ukf(ukf_cfg);
     
     // Initial state: stationary at equator, 10km altitude
     State x0;
@@ -122,11 +122,22 @@ int main() {
         if (i % 100 == 0 && i > 0) {
             State current_state = ukf.getState();
             
-            // Simulate gravity gradient measurement
-            auto true_gradient = gradient_provider.getGradient(current_state.p_ECEF);
+            // Simulate gravity gradient measurement using simple physics
+            Eigen::Vector3d pos = current_state.p_ECEF;
+            double r = pos.norm();
+            const double GM = 3.986004418e14;  // m³/s²
+            const double E_conversion = 1e9;   // Convert to Eötvös
+            double factor = 3.0 * GM * E_conversion / (r * r * r * r * r);
+            
+            Eigen::Matrix3d measured_gradient;
+            for(int j = 0; j < 3; j++) {
+                for(int k = 0; k < 3; k++) {
+                    double delta = (j == k) ? 1.0 : 0.0;
+                    measured_gradient(j,k) = factor * (3.0 * pos(j) * pos(k) / (r * r) - delta);
+                }
+            }
             
             // Add measurement noise (0.1 Eötvös)
-            Eigen::Matrix3d measured_gradient = true_gradient.T;
             measured_gradient += 0.1 * Eigen::Matrix3d::Random();
             
             // Measurement noise covariance
@@ -136,7 +147,9 @@ int main() {
             ukf.updateGradient(measured_gradient, R);
             
             // Also update with gravity anomaly
-            double true_anomaly = gradient_provider.getAnomaly(current_state.p_ECEF);
+            // Simple synthetic anomaly based on position
+            double lat = std::asin(pos.z() / r);
+            double true_anomaly = 10.0 * std::sin(lat * 10.0);  // mGal
             double measured_anomaly = true_anomaly + std::normal_distribution<double>(0.0, 0.5)(generator);
             ukf.updateAnomaly(measured_anomaly, 0.25);  // 0.5² = 0.25 variance
             

@@ -100,16 +100,14 @@ int main(int argc, char** argv) {
         std::cout << "Initial position: 0°N, 0°E (Null Island)\n";
     }
     
-    // Initial covariance
-    Eigen::Matrix<double, UKF::STATE_DIM, UKF::STATE_DIM> P0 = 
-        Eigen::Matrix<double, UKF::STATE_DIM, UKF::STATE_DIM>::Identity();
+    // Initial covariance (15D error state)
+    Eigen::Matrix<double, UKF::ERROR_STATE_DIM, UKF::ERROR_STATE_DIM> P0 = 
+        Eigen::Matrix<double, UKF::ERROR_STATE_DIM, UKF::ERROR_STATE_DIM>::Identity();
     P0.block<3,3>(0,0) *= 100.0;    // Position uncertainty: 10m
     P0.block<3,3>(3,3) *= 1.0;      // Velocity uncertainty: 1 m/s
     P0.block<3,3>(6,6) *= 0.01;     // Attitude uncertainty: 0.1 rad
-    P0.block<3,3>(10,10) *= 0.01;   // Acc bias uncertainty
-    P0.block<3,3>(13,13) *= 0.001;  // Gyro bias uncertainty
-    P0(16,16) = 1e-6;                // Clock offset uncertainty
-    P0(17,17) = 1e-9;                // Clock drift uncertainty
+    P0.block<3,3>(9,9) *= 0.01;     // Acc bias uncertainty
+    P0.block<3,3>(12,12) *= 0.001;  // Gyro bias uncertainty
     
     ukf.init(x0, P0);
     std::cout << "✓ UKF initialized\n\n";
@@ -141,7 +139,7 @@ int main(int argc, char** argv) {
         }
         
         // Propagate UKF with IMU
-        ukf.propagateWithIMU(imu_sample, dt);
+        ukf.predict(imu_sample, dt);
         
         // Update with gravity gradiometer (if available)
         if (gradiometer && gradiometer->hasNewData()) {
@@ -149,7 +147,7 @@ int main(int argc, char** argv) {
             
             // Validate measurement
             if (gradient.isValid()) {
-                ukf.updateGravityGradient(gradient.T, gradient.R);
+                ukf.updateGradient(gradient.T, gradient.R);
                 gradient_updates++;
                 
                 if (gradient_updates % 10 == 0) {
@@ -176,7 +174,7 @@ int main(int argc, char** argv) {
             
             // Update if significant
             if (std::abs(anomaly_mgal) > 0.1) {
-                ukf.updateGravityAnomaly(anomaly_mgal, 1.0);  // 1 mGal noise
+                ukf.updateAnomaly(anomaly_mgal, 1.0);  // 1 mGal noise variance
                 anomaly_updates++;
             }
         }
@@ -184,7 +182,8 @@ int main(int argc, char** argv) {
         // Update with CSAC (if available)
         if (csac && csac->hasNewData()) {
             CSACMeasurement csac_meas = csac->read();
-            ukf.updateClock(csac_meas.offset_s, csac_meas.drift_ppm);
+            // Clock updates not yet implemented in stable UKF
+            // TODO: Add clock state to UKF if needed
         }
         
         // Get current state

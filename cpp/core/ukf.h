@@ -2,108 +2,130 @@
 #include "types.h"
 #include <Eigen/Dense>
 #include <vector>
+#include <iostream>
 
 /**
- * Unscented Kalman Filter for Gravity-Primary Navigation
+ * Stable UKF Implementation using Error-State Formulation
  * 
- * Superior to EKF for highly nonlinear gravity gradient measurements
- * Uses sigma points to propagate uncertainty without linearization
+ * Key insight: Use 15-dimensional error state for covariance
+ * while maintaining 16-dimensional full state
+ * 
+ * This avoids quaternion normalization issues in covariance
  */
 class UKF {
 public:
-    // Extended state dimension: 18 states
-    // [position(3), velocity(3), attitude(4), acc_bias(3), gyro_bias(3), clock_offset(1), clock_drift(1)]
-    static constexpr int STATE_DIM = 18;
-    static constexpr int SIGMA_POINTS = 2 * STATE_DIM + 1;
+    // State dimensions
+    static constexpr int FULL_STATE_DIM = 16;  // p(3) + v(3) + q(4) + ba(3) + bg(3)
+    static constexpr int ERROR_STATE_DIM = 15; // p(3) + v(3) + θ(3) + ba(3) + bg(3)
+    static constexpr int NUM_SIGMA_POINTS = 2 * ERROR_STATE_DIM + 1;
+    
+    // State indices
+    static constexpr int POS_IDX = 0;
+    static constexpr int VEL_IDX = 3;
+    static constexpr int ATT_IDX = 6;  // In error state, this is 3D rotation vector
+    static constexpr int BA_IDX = 9;
+    static constexpr int BG_IDX = 12;
     
     struct Config {
         double alpha;  // Spread of sigma points
-        double beta;    // Prior knowledge of distribution (2 = Gaussian)
-        double kappa;   // Secondary scaling parameter
+        double beta;    // Prior knowledge (2 = Gaussian)
+        double kappa;   // Secondary scaling
         
-        // Process noise parameters
-        double q_pos;
-        double q_vel;
-        double q_att;
-        double q_acc_bias;
-        double q_gyro_bias;
-        double q_clock_offset;
-        double q_clock_drift;
+        // Process noise (standard deviations)
+        double sigma_pos;      // m
+        double sigma_vel;      // m/s
+        double sigma_att;     // rad
+        double sigma_ba;      // m/s²
+        double sigma_bg;      // rad/s
         
-        // Constructor with default values
         Config() : 
             alpha(1e-3), beta(2.0), kappa(0.0),
-            q_pos(0.01), q_vel(0.1), q_att(0.001),
-            q_acc_bias(1e-6), q_gyro_bias(1e-7),
-            q_clock_offset(1e-9), q_clock_drift(1e-12) {}
+            sigma_pos(0.1), sigma_vel(1.0), sigma_att(0.01),
+            sigma_ba(1e-4), sigma_bg(1e-5) {}
     };
     
-    UKF(const Config& cfg = Config()) : cfg_(cfg) {
-        computeWeights();
-    }
+    UKF(const Config& cfg = Config());
     
     /**
-     * Initialize filter with initial state and covariance
+     * Initialize filter with state and covariance
      */
-    void init(const State& x0, const Eigen::Matrix<double, STATE_DIM, STATE_DIM>& P0);
+    void init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P0);
     
     /**
-     * Prediction step - propagate sigma points through dynamics
+     * Prediction step with IMU data
      */
-    void predict(double dt);
+    void predict(const ImuSample& imu, double dt);
     
     /**
-     * Update with gravity gradient tensor measurement
+     * Update with gravity gradient measurement
      */
-    void updateGravityGradient(const Eigen::Matrix3d& measured_gradient,
-                               const Eigen::Matrix3d& gradient_noise);
+    void updateGradient(const Eigen::Matrix3d& measured, const Eigen::Matrix3d& R);
     
     /**
-     * Update with gravity anomaly scalar measurement
+     * Update with gravity anomaly
      */
-    void updateGravityAnomaly(double measured_anomaly, double anomaly_noise);
+    void updateAnomaly(double measured, double noise);
     
-    /**
-     * Propagate with IMU measurements
-     */
-    void propagateWithIMU(const ImuSample& imu, double dt);
-    
-    /**
-     * Update with clock measurements
-     */
-    void updateClock(double offset_s, double drift_ppm);
-    
-    /**
-     * Get current state estimate
-     */
-    State getState() const { return x_; }
-    
-    /**
-     * Get current covariance
-     */
-    Eigen::Matrix<double, STATE_DIM, STATE_DIM> getCovariance() const { return P_; }
+    State getState() const { return nominal_state_; }
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCovariance() const { return P_; }
     
 private:
-    Config cfg_;
-    State x_;  // Current state estimate
-    Eigen::Matrix<double, STATE_DIM, STATE_DIM> P_;  // State covariance
+    // Nominal state (16D with quaternion)
+    State nominal_state_;
     
-    // Sigma points and weights
-    std::vector<State> sigma_points_;
+    // Error-state covariance (15x15)
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_;
+    
+    // Sigma points in error-state space
+    struct SigmaPoint {
+        State state;  // Full state
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> error;  // Error state
+    };
+    std::vector<SigmaPoint> sigma_points_;
+    
+    // UKF parameters
+    Config cfg_;
+    double lambda_;
     Eigen::VectorXd weights_mean_;
     Eigen::VectorXd weights_cov_;
     
-    // Computed UKF parameters
-    double lambda_;
-    
-    void computeWeights();
+    /**
+     * Generate sigma points using error-state formulation
+     */
     void generateSigmaPoints();
-    State propagateState(const State& x, double dt);
-    Eigen::VectorXd stateToVector(const State& x);
-    State vectorToState(const Eigen::VectorXd& v);
     
     /**
-     * Compute gravity gradient at given position using EGM2020
+     * Propagate a single state forward
      */
-    Eigen::Matrix3d computeGradientFromPosition(const Eigen::Vector3d& pos_ECEF);
+    State propagateState(const State& state, const ImuSample& imu, double dt);
+    
+    /**
+     * Compute error between two states (handles quaternion properly)
+     */
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> computeError(const State& x1, const State& x2);
+    
+    /**
+     * Apply error to state (handles quaternion properly)
+     */
+    State applyError(const State& nominal, const Eigen::Matrix<double, ERROR_STATE_DIM, 1>& error);
+    
+    /**
+     * Convert rotation vector to quaternion
+     */
+    Eigen::Quaterniond rotationVectorToQuaternion(const Eigen::Vector3d& rot_vec);
+    
+    /**
+     * Convert quaternion difference to rotation vector
+     */
+    Eigen::Vector3d quaternionToRotationVector(const Eigen::Quaterniond& q);
+    
+    /**
+     * Ensure covariance matrix remains positive definite
+     */
+    void enforcePositiveDefinite(Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P);
+    
+    /**
+     * Compute UKF weights
+     */
+    void computeWeights();
 };

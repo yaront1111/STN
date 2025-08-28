@@ -25,7 +25,6 @@ endif()
 add_library(gravity_core STATIC
     cpp/core/types.cpp
     cpp/core/ukf.cpp
-    cpp/core/ukf_stable.cpp
     cpp/core/gravity_model.cpp
     cpp/core/gravity_gradient_provider.cpp
 )
@@ -73,31 +72,30 @@ if(GTSAM_FOUND)
     message(STATUS "GTSAM found - factor graph optimization enabled")
 endif()
 
-# Test program with real data
-add_executable(test_real_data
-    core/test_with_real_data.cpp
+# Flight data validator
+add_executable(flight_validator
+    core/flight_data_validator.cpp
 )
 
-target_link_libraries(test_real_data
+target_link_libraries(flight_validator
     gravity_core
     Eigen3::Eigen
 )
 
-# Tests
+# UKF validator
+add_executable(ukf_validator
+    cpp/validation/ukf_validator.cpp
+)
+
+target_link_libraries(ukf_validator
+    gravity_core
+    Eigen3::Eigen
+)
+
+# Validation tests
 enable_testing()
-add_test(NAME real_data_test COMMAND test_real_data flight_data.csv)
-
-# Test stable UKF
-add_executable(test_ukf_stable
-    cpp/tests/test_ukf_stable.cpp
-)
-
-target_link_libraries(test_ukf_stable
-    gravity_core
-    Eigen3::Eigen
-)
-
-add_test(NAME ukf_stable_test COMMAND test_ukf_stable)
+add_test(NAME flight_validation COMMAND flight_validator flight_data.csv)
+add_test(NAME ukf_validation COMMAND ukf_validator)
 
 # Benchmarks and tools - to be created later
 

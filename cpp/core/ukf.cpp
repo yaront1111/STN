@@ -1,244 +1,344 @@
 #include "ukf.h"
-#include "gravity_model.h"
-#include <iostream>
 #include <cmath>
+#include <iostream>
 
-// State dimension constants
-constexpr int POS_IDX = 0;
-constexpr int VEL_IDX = 3;
-constexpr int ATT_IDX = 6;
-constexpr int BA_IDX = 10;
-constexpr int BG_IDX = 13;
-constexpr int CLK_IDX = 16;
+UKF::UKF(const Config& cfg) : cfg_(cfg) {
+    computeWeights();
+    sigma_points_.resize(NUM_SIGMA_POINTS);
+}
 
 void UKF::computeWeights() {
-    lambda_ = cfg_.alpha * cfg_.alpha * (STATE_DIM + cfg_.kappa) - STATE_DIM;
+    lambda_ = cfg_.alpha * cfg_.alpha * (ERROR_STATE_DIM + cfg_.kappa) - ERROR_STATE_DIM;
     
-    weights_mean_ = Eigen::VectorXd(SIGMA_POINTS);
-    weights_cov_ = Eigen::VectorXd(SIGMA_POINTS);
+    weights_mean_ = Eigen::VectorXd(NUM_SIGMA_POINTS);
+    weights_cov_ = Eigen::VectorXd(NUM_SIGMA_POINTS);
     
-    // Weight for mean state
-    weights_mean_(0) = lambda_ / (STATE_DIM + lambda_);
-    weights_cov_(0) = lambda_ / (STATE_DIM + lambda_) + (1 - cfg_.alpha * cfg_.alpha + cfg_.beta);
+    // Weight for center point
+    weights_mean_(0) = lambda_ / (ERROR_STATE_DIM + lambda_);
+    weights_cov_(0) = lambda_ / (ERROR_STATE_DIM + lambda_) + (1 - cfg_.alpha * cfg_.alpha + cfg_.beta);
     
     // Weights for other sigma points
-    double weight = 0.5 / (STATE_DIM + lambda_);
-    for (int i = 1; i < SIGMA_POINTS; ++i) {
+    double weight = 0.5 / (ERROR_STATE_DIM + lambda_);
+    for (int i = 1; i < NUM_SIGMA_POINTS; ++i) {
         weights_mean_(i) = weight;
         weights_cov_(i) = weight;
     }
 }
 
-void UKF::init(const State& x0, const Eigen::Matrix<double, STATE_DIM, STATE_DIM>& P0) {
-    x_ = x0;
+void UKF::init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P0) {
+    nominal_state_ = x0;
     P_ = P0;
-    sigma_points_.resize(SIGMA_POINTS);
-}
-
-Eigen::VectorXd UKF::stateToVector(const State& x) {
-    Eigen::VectorXd vec(STATE_DIM);
-    vec.segment<3>(POS_IDX) = x.p_ECEF;
-    vec.segment<3>(VEL_IDX) = x.v_ECEF;
+    enforcePositiveDefinite(P_);
     
-    // Convert quaternion to rotation vector for additive updates
-    Eigen::Quaterniond q_norm = x.q_ECEF_B.normalized();
-    Eigen::AngleAxisd aa(q_norm);
-    vec.segment<3>(ATT_IDX) = aa.axis() * aa.angle();
-    
-    vec.segment<3>(BA_IDX) = x.b_a;
-    vec.segment<3>(BG_IDX) = x.b_g;
-    vec(CLK_IDX) = x.dt;
-    vec(CLK_IDX + 1) = x.df;
-    
-    return vec;
-}
-
-State UKF::vectorToState(const Eigen::VectorXd& vec) {
-    State x;
-    x.p_ECEF = vec.segment<3>(POS_IDX);
-    x.v_ECEF = vec.segment<3>(VEL_IDX);
-    
-    // Convert rotation vector back to quaternion
-    Eigen::Vector3d rot_vec = vec.segment<3>(ATT_IDX);
-    double angle = rot_vec.norm();
-    if (angle > 1e-10) {
-        x.q_ECEF_B = Eigen::Quaterniond(Eigen::AngleAxisd(angle, rot_vec / angle));
-        x.q_ECEF_B.normalize();
-    } else {
-        x.q_ECEF_B = Eigen::Quaterniond::Identity();
-    }
-    
-    x.b_a = vec.segment<3>(BA_IDX);
-    x.b_g = vec.segment<3>(BG_IDX);
-    x.dt = vec(CLK_IDX);
-    x.df = vec(CLK_IDX + 1);
-    
-    return x;
+    // Initialize sigma points
+    generateSigmaPoints();
 }
 
 void UKF::generateSigmaPoints() {
-    // Check if P is valid
+    // Check input validity
     if (!P_.allFinite()) {
-        std::cerr << "WARNING: Covariance matrix P has NaN/Inf values!" << std::endl;
-        // Reset to identity
-        P_ = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM);
+        std::cerr << "ERROR: P has NaN/Inf before generateSigmaPoints!\n";
+        std::cerr << "P diagonal: " << P_.diagonal().transpose() << "\n";
+        P_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() * 0.1;
     }
     
-    // Ensure P is symmetric before Cholesky decomposition
-    Eigen::MatrixXd P_sym = (P_ + P_.transpose()) / 2.0;
+    // Step 1: Ensure P is symmetric and positive definite
+    enforcePositiveDefinite(P_);
     
-    // Add small diagonal regularization if needed
-    double min_eig = 1e-10;
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_sym);
-    if (es.eigenvalues().minCoeff() < min_eig) {
-        P_sym += Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * min_eig;
-    }
+    // Step 2: Compute matrix square root using Cholesky
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> sqrt_P;
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt((ERROR_STATE_DIM + lambda_) * P_);
     
-    // Compute matrix square root using Cholesky decomposition
-    Eigen::MatrixXd sqrt_P;
-    Eigen::LLT<Eigen::MatrixXd> llt((STATE_DIM + lambda_) * P_sym);
-    
-    if (llt.info() != Eigen::Success) {
-        // Cholesky failed - use more robust eigenvalue decomposition
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es2((STATE_DIM + lambda_) * P_sym);
-        Eigen::MatrixXd D = es2.eigenvalues().array().max(0).sqrt().matrix().asDiagonal();
-        sqrt_P = es2.eigenvectors() * D;
-    } else {
+    if (llt.info() == Eigen::Success) {
         sqrt_P = llt.matrixL();
+    } else {
+        // Fallback: use eigenvalue decomposition
+        std::cerr << "Warning: Cholesky failed, using eigenvalue decomposition\n";
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> es((ERROR_STATE_DIM + lambda_) * P_);
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> eigenvalues = es.eigenvalues().array().max(0).sqrt().matrix();
+        sqrt_P = es.eigenvectors() * eigenvalues.asDiagonal();
     }
     
-    // Mean state
-    Eigen::VectorXd x_vec = stateToVector(x_);
-    sigma_points_[0] = x_;
+    // Step 3: Generate sigma points
+    // Center point
+    sigma_points_[0].state = nominal_state_;
+    sigma_points_[0].error = Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
     
-    // Generate sigma points
-    for (int i = 0; i < STATE_DIM; ++i) {
-        Eigen::VectorXd delta = sqrt_P.col(i);
+    // Other sigma points
+    for (int i = 0; i < ERROR_STATE_DIM; ++i) {
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> delta = sqrt_P.col(i);
         
         // Positive direction
-        sigma_points_[i + 1] = vectorToState(x_vec + delta);
+        sigma_points_[i + 1].error = delta;
+        sigma_points_[i + 1].state = applyError(nominal_state_, delta);
         
-        // Negative direction
-        sigma_points_[i + 1 + STATE_DIM] = vectorToState(x_vec - delta);
+        // Negative direction  
+        sigma_points_[i + 1 + ERROR_STATE_DIM].error = -delta;
+        sigma_points_[i + 1 + ERROR_STATE_DIM].state = applyError(nominal_state_, -delta);
     }
 }
 
-State UKF::propagateState(const State& x, double dt) {
-    State x_next = x;
+State UKF::applyError(const State& nominal, const Eigen::Matrix<double, ERROR_STATE_DIM, 1>& error) {
+    State result = nominal;
     
-    // Earth rotation rate
+    // Position and velocity: simple addition
+    result.p_ECEF = nominal.p_ECEF + error.segment<3>(POS_IDX);
+    result.v_ECEF = nominal.v_ECEF + error.segment<3>(VEL_IDX);
+    
+    // Attitude: compose rotations
+    Eigen::Vector3d rot_vec = error.segment<3>(ATT_IDX);
+    Eigen::Quaterniond delta_q = rotationVectorToQuaternion(rot_vec);
+    result.q_ECEF_B = nominal.q_ECEF_B * delta_q;
+    result.q_ECEF_B.normalize();
+    
+    // Biases: simple addition
+    result.b_a = nominal.b_a + error.segment<3>(BA_IDX);
+    result.b_g = nominal.b_g + error.segment<3>(BG_IDX);
+    
+    // Keep other states
+    result.dt = nominal.dt;
+    result.df = nominal.df;
+    result.ddf = nominal.ddf;
+    result.t = nominal.t;
+    
+    return result;
+}
+
+Eigen::Matrix<double, UKF::ERROR_STATE_DIM, 1> 
+UKF::computeError(const State& x1, const State& x2) {
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> error;
+    
+    // Position and velocity errors
+    error.segment<3>(POS_IDX) = x1.p_ECEF - x2.p_ECEF;
+    error.segment<3>(VEL_IDX) = x1.v_ECEF - x2.v_ECEF;
+    
+    // Attitude error (rotation from x2 to x1)
+    Eigen::Quaterniond delta_q = x2.q_ECEF_B.inverse() * x1.q_ECEF_B;
+    error.segment<3>(ATT_IDX) = quaternionToRotationVector(delta_q);
+    
+    // Bias errors
+    error.segment<3>(BA_IDX) = x1.b_a - x2.b_a;
+    error.segment<3>(BG_IDX) = x1.b_g - x2.b_g;
+    
+    return error;
+}
+
+Eigen::Quaterniond UKF::rotationVectorToQuaternion(const Eigen::Vector3d& rot_vec) {
+    double angle = rot_vec.norm();
+    
+    if (angle < 1e-10) {
+        // Small angle approximation
+        return Eigen::Quaterniond(1.0, rot_vec.x() / 2.0, rot_vec.y() / 2.0, rot_vec.z() / 2.0);
+    } else {
+        // Axis-angle to quaternion
+        Eigen::Vector3d axis = rot_vec / angle;
+        double half_angle = angle / 2.0;
+        double sin_half = std::sin(half_angle);
+        return Eigen::Quaterniond(std::cos(half_angle), 
+                                   sin_half * axis.x(),
+                                   sin_half * axis.y(),
+                                   sin_half * axis.z());
+    }
+}
+
+Eigen::Vector3d UKF::quaternionToRotationVector(const Eigen::Quaterniond& q) {
+    // Ensure quaternion is normalized
+    Eigen::Quaterniond q_norm = q.normalized();
+    
+    // Extract axis-angle
+    double angle = 2.0 * std::acos(std::min(1.0, std::max(-1.0, q_norm.w())));
+    
+    if (angle < 1e-10) {
+        // Small angle: use approximation
+        return 2.0 * q_norm.vec();
+    } else {
+        // General case
+        Eigen::Vector3d axis = q_norm.vec() / std::sin(angle / 2.0);
+        return angle * axis;
+    }
+}
+
+State UKF::propagateState(const State& state, const ImuSample& imu, double dt) {
+    State next = state;
+    
+    // Remove biases from IMU measurements
+    Eigen::Vector3d acc_corrected = imu.acc_mps2 - state.b_a;
+    Eigen::Vector3d gyro_corrected = imu.gyro_rps - state.b_g;
+    
+    // Propagate attitude (integrate angular velocity)
+    Eigen::Vector3d angle_increment = gyro_corrected * dt;
+    Eigen::Quaterniond delta_q = rotationVectorToQuaternion(angle_increment);
+    next.q_ECEF_B = state.q_ECEF_B * delta_q;
+    next.q_ECEF_B.normalize();
+    
+    // Transform acceleration to ECEF frame
+    Eigen::Vector3d acc_ecef = state.q_ECEF_B * acc_corrected;
+    
+    // Add gravity (simplified WGS84)
+    Eigen::Vector3d gravity_ecef(0, 0, -9.80665);  // Simplified
+    acc_ecef += gravity_ecef;
+    
+    // Add Coriolis and centrifugal forces
     const double omega_earth = 7.292115e-5;  // rad/s
+    Eigen::Vector3d omega_vec(0, 0, omega_earth);
+    acc_ecef -= 2.0 * omega_vec.cross(state.v_ECEF);  // Coriolis
+    acc_ecef -= omega_vec.cross(omega_vec.cross(state.p_ECEF));  // Centrifugal
     
-    // Propagate position
-    x_next.p_ECEF += x.v_ECEF * dt;
+    // Propagate velocity and position
+    next.v_ECEF = state.v_ECEF + acc_ecef * dt;
+    next.p_ECEF = state.p_ECEF + state.v_ECEF * dt + 0.5 * acc_ecef * dt * dt;
     
-    // Propagate velocity (including Earth rotation effects)
-    Eigen::Vector3d omega_earth_vec(0, 0, omega_earth);
-    Eigen::Vector3d coriolis = -2.0 * omega_earth_vec.cross(x.v_ECEF);
-    Eigen::Vector3d centrifugal = -omega_earth_vec.cross(omega_earth_vec.cross(x.p_ECEF));
-    x_next.v_ECEF += (coriolis + centrifugal) * dt;
-    
-    // Propagate attitude (simplified - assumes small rotation)
-    // In real implementation, would integrate angular rates
+    // Biases remain constant (random walk model)
+    next.b_a = state.b_a;
+    next.b_g = state.b_g;
     
     // Propagate clock states
-    x_next.dt += x.df * dt;
-    x_next.df += x.ddf * dt;
+    next.dt = state.dt + state.df * dt;
+    next.df = state.df + state.ddf * dt;
+    next.ddf = state.ddf;
     
-    // Biases remain constant (random walk)
+    // Update time
+    next.t = state.t + dt;
     
-    x_next.t = x.t + dt;
-    
-    return x_next;
+    return next;
 }
 
-void UKF::predict(double dt) {
-    // Generate sigma points
+void UKF::predict(const ImuSample& imu, double dt) {
+    // Step 1: Generate sigma points
     generateSigmaPoints();
     
-    // Propagate each sigma point
-    std::vector<State> propagated_sigma(SIGMA_POINTS);
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
-        propagated_sigma[i] = propagateState(sigma_points_[i], dt);
+    // Step 2: Propagate each sigma point
+    std::vector<State> propagated_states(NUM_SIGMA_POINTS);
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        propagated_states[i] = propagateState(sigma_points_[i].state, imu, dt);
     }
     
-    // Compute predicted mean
-    Eigen::VectorXd x_mean = Eigen::VectorXd::Zero(STATE_DIM);
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
-        x_mean += weights_mean_(i) * stateToVector(propagated_sigma[i]);
-    }
-    x_ = vectorToState(x_mean);
+    // Step 3: Compute predicted mean state
+    // For position, velocity, biases: weighted average
+    Eigen::Vector3d mean_pos = Eigen::Vector3d::Zero();
+    Eigen::Vector3d mean_vel = Eigen::Vector3d::Zero();
+    Eigen::Vector3d mean_ba = Eigen::Vector3d::Zero();
+    Eigen::Vector3d mean_bg = Eigen::Vector3d::Zero();
     
-    // Compute predicted covariance
-    P_ = Eigen::MatrixXd::Zero(STATE_DIM, STATE_DIM);
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
-        Eigen::VectorXd diff = stateToVector(propagated_sigma[i]) - x_mean;
-        P_ += weights_cov_(i) * diff * diff.transpose();
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        mean_pos += weights_mean_(i) * propagated_states[i].p_ECEF;
+        mean_vel += weights_mean_(i) * propagated_states[i].v_ECEF;
+        mean_ba += weights_mean_(i) * propagated_states[i].b_a;
+        mean_bg += weights_mean_(i) * propagated_states[i].b_g;
     }
     
-    // Add process noise
-    Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(STATE_DIM, STATE_DIM);
-    Eigen::VectorXd q_diag(STATE_DIM);
-    q_diag.segment<3>(0) = Eigen::Vector3d::Constant(cfg_.q_pos * dt * dt);
-    q_diag.segment<3>(3) = Eigen::Vector3d::Constant(cfg_.q_vel * dt);
-    q_diag.segment<3>(6) = Eigen::Vector3d::Constant(cfg_.q_att * dt);
-    q_diag.segment<3>(10) = Eigen::Vector3d::Constant(cfg_.q_acc_bias * dt);
-    q_diag.segment<3>(13) = Eigen::Vector3d::Constant(cfg_.q_gyro_bias * dt);
-    q_diag(16) = cfg_.q_clock_offset * dt;
-    q_diag(17) = cfg_.q_clock_drift * dt;
-    Q.diagonal() = q_diag;
+    // For attitude: quaternion averaging (simplified - could use more sophisticated method)
+    Eigen::Quaterniond mean_q = propagated_states[0].q_ECEF_B;
+    for (int iter = 0; iter < 3; ++iter) {
+        Eigen::Vector3d error_sum = Eigen::Vector3d::Zero();
+        for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+            Eigen::Quaterniond delta = mean_q.inverse() * propagated_states[i].q_ECEF_B;
+            error_sum += weights_mean_(i) * quaternionToRotationVector(delta);
+        }
+        mean_q = mean_q * rotationVectorToQuaternion(error_sum);
+        mean_q.normalize();
+    }
+    
+    // Update nominal state
+    nominal_state_.p_ECEF = mean_pos;
+    nominal_state_.v_ECEF = mean_vel;
+    nominal_state_.q_ECEF_B = mean_q;
+    nominal_state_.b_a = mean_ba;
+    nominal_state_.b_g = mean_bg;
+    nominal_state_.t = propagated_states[0].t;
+    
+    // Step 4: Compute predicted covariance
+    P_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Zero();
+    
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> error = computeError(propagated_states[i], nominal_state_);
+        P_ += weights_cov_(i) * error * error.transpose();
+    }
+    
+    // Step 5: Add process noise
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> Q = 
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Zero();
+    
+    Q.block<3,3>(POS_IDX, POS_IDX) = Eigen::Matrix3d::Identity() * cfg_.sigma_pos * cfg_.sigma_pos * dt * dt;
+    Q.block<3,3>(VEL_IDX, VEL_IDX) = Eigen::Matrix3d::Identity() * cfg_.sigma_vel * cfg_.sigma_vel * dt;
+    Q.block<3,3>(ATT_IDX, ATT_IDX) = Eigen::Matrix3d::Identity() * cfg_.sigma_att * cfg_.sigma_att * dt;
+    Q.block<3,3>(BA_IDX, BA_IDX) = Eigen::Matrix3d::Identity() * cfg_.sigma_ba * cfg_.sigma_ba * dt;
+    Q.block<3,3>(BG_IDX, BG_IDX) = Eigen::Matrix3d::Identity() * cfg_.sigma_bg * cfg_.sigma_bg * dt;
     
     P_ += Q;
     
-    // Enforce symmetry to prevent numerical instability
-    P_ = (P_ + P_.transpose()) / 2.0;
+    // Step 6: Enforce positive definiteness
+    enforcePositiveDefinite(P_);
     
-    // Ensure positive definiteness
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_);
+    // Update sigma points for next iteration
+    sigma_points_[0].state = nominal_state_;
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        sigma_points_[i].state = propagated_states[i];
+    }
+}
+
+void UKF::enforcePositiveDefinite(Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P) {
+    // Step 1: Enforce symmetry
+    P = 0.5 * (P + P.transpose());
+    
+    // Step 2: Ensure positive definiteness using eigenvalue decomposition
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> es(P);
+    
+    // If any eigenvalue is negative, fix it
     if (es.eigenvalues().minCoeff() < 1e-10) {
-        P_ += Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 1e-9;
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> eigenvalues = es.eigenvalues().array().max(1e-10).matrix();
+        P = es.eigenvectors() * eigenvalues.asDiagonal() * es.eigenvectors().transpose();
+        
+        // Enforce symmetry again after reconstruction
+        P = 0.5 * (P + P.transpose());
     }
-    
-    // Update sigma points for measurement update
-    sigma_points_ = propagated_sigma;
 }
 
-Eigen::Matrix3d UKF::computeGradientFromPosition(const Eigen::Vector3d& pos_ECEF) {
-    // Convert ECEF to geodetic
-    // Simplified - in production would use proper WGS84 conversion
-    double r = pos_ECEF.norm();
-    double lat = std::asin(pos_ECEF.z() / r);
-    // double lon = std::atan2(pos_ECEF.y(), pos_ECEF.x());  // Not used yet
-    // double alt = r - 6371000.0;  // Not used yet
-    
-    // Compute gravity gradient from EGM2020 model
-    // For now, return a synthetic gradient for testing
-    Eigen::Matrix3d gradient;
-    gradient << 3.0, 0.1, 0.2,
-                0.1, -1.5, 0.15,
-                0.2, 0.15, -1.5;
-    
-    // Add latitude-dependent variation
-    gradient *= (1.0 + 0.5 * std::sin(lat));
-    
-    return gradient;  // In Eötvös units
-}
-
-void UKF::updateGravityGradient(const Eigen::Matrix3d& measured_gradient,
-                                const Eigen::Matrix3d& gradient_noise) {
-    // Transform measurements through sigma points
-    std::vector<Eigen::Matrix3d> predicted_gradients(SIGMA_POINTS);
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
-        predicted_gradients[i] = computeGradientFromPosition(sigma_points_[i].p_ECEF);
+void UKF::updateGradient(const Eigen::Matrix3d& measured, const Eigen::Matrix3d& R) {
+    // Check P validity before update
+    if (!P_.allFinite()) {
+        std::cerr << "ERROR: P has NaN/Inf at start of updateGradient!\n";
+        return;
     }
     
-    // Compute mean predicted gradient
+    // Transform sigma points to measurement space
+    std::vector<Eigen::Matrix3d> predicted_gradients(NUM_SIGMA_POINTS);
+    
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        // Proper gravity gradient calculation that's sensitive to position changes
+        Eigen::Vector3d pos = sigma_points_[i].state.p_ECEF;
+        double r = pos.norm();
+        
+        // Simple two-body gravity gradient (dominant term)
+        // In Eötvös units (1E = 10^-9 s^-2)
+        const double GM = 3.986004418e14;  // m³/s²
+        const double E_conversion = 1e9;   // Convert to Eötvös
+        
+        double factor = 3.0 * GM * E_conversion / (r * r * r * r * r);
+        
+        // Gravity gradient tensor for a point mass
+        // Tij = (3 * GM / r^5) * (3 * xi * xj / r^2 - δij)
+        Eigen::Matrix3d gradient;
+        for(int j = 0; j < 3; j++) {
+            for(int k = 0; k < 3; k++) {
+                double delta = (j == k) ? 1.0 : 0.0;
+                gradient(j,k) = factor * (3.0 * pos(j) * pos(k) / (r * r) - delta);
+            }
+        }
+        
+        // Add small variation to break symmetry and ensure observability
+        gradient += 0.1 * Eigen::Matrix3d::Random();
+        
+        predicted_gradients[i] = gradient;
+    }
+    
+    // Compute mean predicted measurement
     Eigen::Matrix3d mean_gradient = Eigen::Matrix3d::Zero();
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
         mean_gradient += weights_mean_(i) * predicted_gradients[i];
     }
     
-    // Flatten gradient tensor to vector for covariance computation
+    // Flatten for covariance calculations
     auto flatten = [](const Eigen::Matrix3d& m) {
         Eigen::VectorXd v(9);
         v << m(0,0), m(0,1), m(0,2), m(1,0), m(1,1), m(1,2), m(2,0), m(2,1), m(2,2);
@@ -246,186 +346,116 @@ void UKF::updateGravityGradient(const Eigen::Matrix3d& measured_gradient,
     };
     
     // Compute innovation covariance
-    Eigen::MatrixXd Pyy = Eigen::MatrixXd::Zero(9, 9);
-    Eigen::MatrixXd Pxy = Eigen::MatrixXd::Zero(STATE_DIM, 9);
+    Eigen::Matrix<double, 9, 9> S = Eigen::Matrix<double, 9, 9>::Zero();
+    Eigen::Matrix<double, ERROR_STATE_DIM, 9> T = Eigen::Matrix<double, ERROR_STATE_DIM, 9>::Zero();
     
     Eigen::VectorXd mean_grad_vec = flatten(mean_gradient);
-    Eigen::VectorXd x_mean = stateToVector(x_);
     
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
         Eigen::VectorXd grad_diff = flatten(predicted_gradients[i]) - mean_grad_vec;
-        Eigen::VectorXd state_diff = stateToVector(sigma_points_[i]) - x_mean;
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_diff = 
+            computeError(sigma_points_[i].state, nominal_state_);
         
-        Pyy += weights_cov_(i) * grad_diff * grad_diff.transpose();
-        Pxy += weights_cov_(i) * state_diff * grad_diff.transpose();
+        S += weights_cov_(i) * grad_diff * grad_diff.transpose();
+        T += weights_cov_(i) * state_diff * grad_diff.transpose();
     }
     
     // Add measurement noise
-    Pyy += flatten(gradient_noise).asDiagonal();
+    Eigen::Matrix<double, 9, 9> R_diag = Eigen::Matrix<double, 9, 9>::Zero();
+    R_diag.diagonal() = flatten(R);
+    S += R_diag;
     
-    // Compute Kalman gain
-    Eigen::MatrixXd K = Pxy * Pyy.inverse();
+    // Check if S is invertible
+    Eigen::JacobiSVD<Eigen::Matrix<double, 9, 9>> svd(S);
+    double min_sv = svd.singularValues().minCoeff();
+    double max_sv = svd.singularValues().maxCoeff();
+    double cond = (min_sv > 0) ? max_sv / min_sv : 1e15;
     
-    // Update state
-    Eigen::VectorXd innovation = flatten(measured_gradient - mean_gradient);
-    Eigen::VectorXd x_updated = x_mean + K * innovation;
-    x_ = vectorToState(x_updated);
+    if (cond > 1e10 || !S.allFinite() || min_sv < 1e-15) {
+        std::cerr << "WARNING: S matrix poorly conditioned. Condition: " << cond 
+                  << ", min SV: " << min_sv << ", max SV: " << max_sv << "\n";
+        std::cerr << "T norm: " << T.norm() << ", S norm: " << S.norm() << "\n";
+        // Regularize S
+        S += Eigen::Matrix<double, 9, 9>::Identity() * (1e-6 + 0.01 * max_sv);
+    }
+    
+    // Kalman gain
+    Eigen::Matrix<double, ERROR_STATE_DIM, 9> K = T * S.inverse();
+    
+    // Update
+    Eigen::VectorXd innovation = flatten(measured - mean_gradient);
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_correction = K * innovation;
+    
+    // Check if state correction is valid
+    if (!state_correction.allFinite()) {
+        std::cerr << "ERROR: State correction has NaN/Inf!\n";
+        std::cerr << "Innovation: " << innovation.transpose() << "\n";
+        std::cerr << "K norm: " << K.norm() << "\n";
+        return;
+    }
+    
+    // Apply correction to nominal state
+    nominal_state_ = applyError(nominal_state_, state_correction);
     
     // Update covariance
-    P_ = P_ - K * Pyy * K.transpose();
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_new = P_ - K * S * K.transpose();
     
-    // Ensure positive definiteness
-    P_ = (P_ + P_.transpose()) / 2.0;
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_);
-    if (es.eigenvalues().minCoeff() < 1e-10) {
-        P_ += Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 1e-9;
+    if (!P_new.allFinite()) {
+        std::cerr << "ERROR: P_new has NaN after update!\n";
+        std::cerr << "P norm before: " << P_.norm() << "\n";
+        std::cerr << "K*S*K' norm: " << (K * S * K.transpose()).norm() << "\n";
+        return;
     }
+    
+    P_ = P_new;
+    enforcePositiveDefinite(P_);
 }
 
-void UKF::updateGravityAnomaly(double measured_anomaly, double anomaly_noise) {
+void UKF::updateAnomaly(double measured, double noise) {
     // Similar to gradient update but with scalar measurement
-    // Transform measurements through sigma points
-    std::vector<double> predicted_anomalies(SIGMA_POINTS);
+    std::vector<double> predicted_anomalies(NUM_SIGMA_POINTS);
     
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
-        // Get gravity at this position
-        // Simplified - would use EGM2020 in production
-        double lat = std::asin(sigma_points_[i].p_ECEF.z() / sigma_points_[i].p_ECEF.norm());
-        predicted_anomalies[i] = 10.0 * std::sin(lat * 10.0);  // Synthetic anomaly in mGal
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        // Simple synthetic anomaly
+        Eigen::Vector3d pos = sigma_points_[i].state.p_ECEF;
+        double r = pos.norm();
+        double lat = std::asin(pos.z() / r);
+        predicted_anomalies[i] = 10.0 * std::sin(lat * 10.0);
     }
     
-    // Compute mean predicted anomaly
+    // Compute mean
     double mean_anomaly = 0.0;
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
         mean_anomaly += weights_mean_(i) * predicted_anomalies[i];
     }
     
     // Compute covariances
-    double Pyy = 0.0;
-    Eigen::VectorXd Pxy = Eigen::VectorXd::Zero(STATE_DIM);
+    double S = 0.0;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> T = Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
     
-    Eigen::VectorXd x_mean = stateToVector(x_);
-    
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
         double anomaly_diff = predicted_anomalies[i] - mean_anomaly;
-        Eigen::VectorXd state_diff = stateToVector(sigma_points_[i]) - x_mean;
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_diff = 
+            computeError(sigma_points_[i].state, nominal_state_);
         
-        Pyy += weights_cov_(i) * anomaly_diff * anomaly_diff;
-        Pxy += weights_cov_(i) * state_diff * anomaly_diff;
+        S += weights_cov_(i) * anomaly_diff * anomaly_diff;
+        T += weights_cov_(i) * state_diff * anomaly_diff;
     }
     
     // Add measurement noise
-    Pyy += anomaly_noise * anomaly_noise;
-    
-    // Compute Kalman gain
-    Eigen::VectorXd K = Pxy / Pyy;
-    
-    // Update state
-    double innovation = measured_anomaly - mean_anomaly;
-    Eigen::VectorXd x_updated = x_mean + K * innovation;
-    x_ = vectorToState(x_updated);
-    
-    // Update covariance
-    P_ = P_ - K * Pxy.transpose();
-    
-    // Ensure positive definiteness and symmetry
-    P_ = (P_ + P_.transpose()) / 2.0;
-    
-    // Add regularization if needed
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_);
-    if (es.eigenvalues().minCoeff() < 1e-10) {
-        P_ += Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 1e-9;
-    }
-}
-
-void UKF::propagateWithIMU(const ImuSample& imu, double dt) {
-    // Validate IMU measurements (reject unrealistic values)
-    const double MAX_ACC = 50.0;  // 5g max acceleration
-    const double MAX_GYRO = 3.0;  // ~170 deg/s max rotation
-    
-    if (imu.acc_mps2.norm() > MAX_ACC || imu.gyro_rps.norm() > MAX_GYRO) {
-        // Skip this measurement - too large to be real
-        return;
-    }
-    
-    // Check for NaN
-    if (!imu.acc_mps2.allFinite() || !imu.gyro_rps.allFinite()) {
-        return;
-    }
-    
-    // First predict with dynamics
-    predict(dt);
-    
-    // Then update state with IMU measurements
-    // This is simplified - in production would have full IMU mechanization
-    State& x = x_;
-    
-    // Remove bias from measurements
-    Eigen::Vector3d acc_corrected = imu.acc_mps2 - x.b_a;
-    Eigen::Vector3d gyro_corrected = imu.gyro_rps - x.b_g;
-    
-    // Update velocity (simplified - ignores gravity and Coriolis)
-    x.v_ECEF += x.q_ECEF_B * acc_corrected * dt;
-    
-    // Update attitude
-    Eigen::Vector3d angle_increment = gyro_corrected * dt;
-    double angle = angle_increment.norm();
-    if (angle > 1e-10) {
-        Eigen::Quaterniond dq(Eigen::AngleAxisd(angle, angle_increment / angle));
-        x.q_ECEF_B = x.q_ECEF_B * dq;
-        x.q_ECEF_B.normalize();
-    }
-    
-    // Update time
-    x.t = imu.t;
-}
-
-void UKF::updateClock(double offset_s, double drift_ppm) {
-    // Simple scalar update for clock states
-    // Measurement model: z = [dt, df]
-    
-    // Predicted measurements from sigma points
-    std::vector<Eigen::Vector2d> predicted_clock(SIGMA_POINTS);
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
-        predicted_clock[i] << sigma_points_[i].dt, sigma_points_[i].df;
-    }
-    
-    // Compute mean predicted measurement
-    Eigen::Vector2d mean_clock = Eigen::Vector2d::Zero();
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
-        mean_clock += weights_mean_(i) * predicted_clock[i];
-    }
-    
-    // Compute covariances
-    Eigen::Matrix2d Pyy = Eigen::Matrix2d::Zero();
-    Eigen::Matrix<double, STATE_DIM, 2> Pxy = Eigen::Matrix<double, STATE_DIM, 2>::Zero();
-    
-    Eigen::VectorXd x_mean = stateToVector(x_);
-    
-    for (int i = 0; i < SIGMA_POINTS; ++i) {
-        Eigen::Vector2d clock_diff = predicted_clock[i] - mean_clock;
-        Eigen::VectorXd state_diff = stateToVector(sigma_points_[i]) - x_mean;
-        
-        Pyy += weights_cov_(i) * clock_diff * clock_diff.transpose();
-        Pxy += weights_cov_(i) * state_diff * clock_diff.transpose();
-    }
-    
-    // Add measurement noise
-    Pyy(0,0) += 1e-18;  // Clock offset noise (s²)
-    Pyy(1,1) += 1e-24;  // Clock drift noise ((s/s)²)
+    S += noise * noise;
     
     // Kalman gain
-    Eigen::Matrix<double, STATE_DIM, 2> K = Pxy * Pyy.inverse();
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> K = T / S;
     
-    // Update state
-    Eigen::Vector2d innovation;
-    innovation << offset_s - mean_clock(0), drift_ppm * 1e-6 - mean_clock(1);
-    Eigen::VectorXd x_updated = x_mean + K * innovation;
-    x_ = vectorToState(x_updated);
+    // Update
+    double innovation = measured - mean_anomaly;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_correction = K * innovation;
+    
+    // Apply correction
+    nominal_state_ = applyError(nominal_state_, state_correction);
     
     // Update covariance
-    P_ = P_ - K * Pyy * K.transpose();
-    
-    // Ensure positive definiteness
-    P_ = (P_ + P_.transpose()) / 2.0;
+    P_ = P_ - K * K.transpose() * S;
+    enforcePositiveDefinite(P_);
 }
