@@ -14,6 +14,7 @@
 #include "../cpp/core/gravity_gradient_provider.h"
 #include "../cpp/core/imu_processor.h"
 #include "../cpp/hardware/hardware_interface.h"
+#include "../cpp/hardware/sensor_interfaces.h"
 #include "../cpp/core/config_reader.h"
 
 int main(int argc, char** argv) {
@@ -60,6 +61,58 @@ int main(int argc, char** argv) {
             gradiometer = nullptr;
         } else {
             std::cout << "✓ Gradiometer initialized\n";
+        }
+    }
+    
+    // Magnetometer for heading reference (GPS-denied navigation)
+    std::unique_ptr<MagnetometerInterface> magnetometer = nullptr;
+    if (config.getBool("hardware.magnetometer.enabled", true)) {
+        magnetometer = SensorFactory::createMagnetometer(
+            config.getString("hardware.magnetometer.type", "HMC5883L"));
+        if (magnetometer && !magnetometer->initialize()) {
+            std::cerr << "WARNING: Magnetometer initialization failed\n";
+            magnetometer = nullptr;
+        } else {
+            std::cout << "✓ Magnetometer initialized for heading reference\n";
+        }
+    }
+    
+    // Barometric altimeter for vertical constraint
+    std::unique_ptr<BarometerInterface> barometer = nullptr;
+    if (config.getBool("hardware.barometer.enabled", true)) {
+        barometer = SensorFactory::createBarometer(
+            config.getString("hardware.barometer.type", "BMP388"));
+        if (barometer && !barometer->initialize()) {
+            std::cerr << "WARNING: Barometer initialization failed\n";
+            barometer = nullptr;
+        } else {
+            std::cout << "✓ Barometer initialized for altitude constraint\n";
+        }
+    }
+    
+    // Radar altimeter for terrain correlation
+    std::unique_ptr<RadarAltimeterInterface> radar_alt = nullptr;
+    if (config.getBool("hardware.radar_altimeter.enabled", true)) {
+        radar_alt = SensorFactory::createRadarAltimeter(
+            config.getString("hardware.radar_altimeter.type", "KRA405B"));
+        if (radar_alt && !radar_alt->initialize()) {
+            std::cerr << "WARNING: Radar altimeter initialization failed\n";
+            radar_alt = nullptr;
+        } else {
+            std::cout << "✓ Radar altimeter initialized for terrain correlation\n";
+        }
+    }
+    
+    // Load terrain database for correlation
+    std::unique_ptr<TerrainDatabase> terrain_db = nullptr;
+    if (radar_alt) {
+        terrain_db = std::make_unique<TerrainDatabase>();
+        if (!terrain_db->loadSRTM("data/srtm/elevation_database.dat")) {
+            std::cerr << "WARNING: Failed to load SRTM terrain data\n";
+            radar_alt = nullptr;  // Disable radar alt if no terrain data
+            terrain_db = nullptr;
+        } else {
+            std::cout << "✓ SRTM terrain database loaded\n";
         }
     }
     
@@ -115,7 +168,7 @@ int main(int argc, char** argv) {
     // Output file
     std::ofstream output_file(config.getString("output.path", "data/gravity_nav.csv"));
     output_file << "t,lat,lon,alt,vn,ve,vd,roll,pitch,yaw,";
-    output_file << "dt,df,gradient_updates,anomaly_updates\n";
+    output_file << "dt,df,gradient_updates,anomaly_updates,mag_updates,baro_updates,terrain_updates,zupt_updates\n";
     
     // Main navigation loop
     std::cout << "Starting gravity-primary navigation...\n";
@@ -125,10 +178,17 @@ int main(int argc, char** argv) {
     double dt = 1.0 / config.getDouble("system.rate_hz", 100.0);
     int gradient_updates = 0;
     int anomaly_updates = 0;
+    int mag_updates = 0;
+    int baro_updates = 0;
+    int terrain_updates = 0;
+    int zupt_updates = 0;
     
     // Statistics
     double start_time = 0.0;
     Eigen::Vector3d initial_pos = x0.p_ECEF;
+    
+    // Reference magnetic field (needs to be set for location)
+    Eigen::Vector3d mag_ref_ECEF(0.0, 0.0, -50000e-9);  // ~50μT downward (simplified)
     
     while (true) {
         // Read IMU
@@ -179,6 +239,52 @@ int main(int argc, char** argv) {
             }
         }
         
+        // GPS-DENIED NAVIGATION UPDATES
+        
+        // Magnetometer update for heading reference
+        if (magnetometer && magnetometer->hasNewData()) {
+            Eigen::Vector3d mag_body = magnetometer->read();
+            if (mag_body.norm() > 1e-9) {  // Valid measurement
+                Eigen::Matrix3d R_mag = Eigen::Matrix3d::Identity() * 100e-18;  // 100 nT² noise
+                ukf.updateMagnetometer(mag_body, mag_ref_ECEF, R_mag);
+                mag_updates++;
+            }
+        }
+        
+        // Barometric altitude update
+        if (barometer && barometer->hasNewData()) {
+            double pressure_alt = barometer->readAltitude();  // meters MSL
+            ukf.updateBarometer(pressure_alt, 1.0);  // 1m² noise variance
+            baro_updates++;
+        }
+        
+        // Terrain correlation with radar altimeter
+        if (radar_alt && terrain_db && radar_alt->hasNewData()) {
+            double radar_altitude = radar_alt->readAltitude();  // meters AGL
+            State current = ukf.getState();
+            Eigen::Vector3d lla = current.toGeodetic();
+            
+            // Get terrain height at current position
+            double terrain_height = terrain_db->getElevation(
+                lla.x() * 180.0 / M_PI, 
+                lla.y() * 180.0 / M_PI);
+            
+            if (terrain_height > -9999) {  // Valid terrain data
+                ukf.updateTerrainAltitude(radar_altitude, terrain_height, 5.0);  // 5m² noise
+                terrain_updates++;
+            }
+        }
+        
+        // Zero Velocity Update (when stationary)
+        // Detect stationary condition from IMU
+        bool is_stationary = (imu_sample.gyro_rps.norm() < 0.01 && 
+                             std::abs(imu_sample.acc_mps2.norm() - 9.81) < 0.5);
+        if (is_stationary) {
+            Eigen::Matrix3d R_vel = Eigen::Matrix3d::Identity() * 0.01;  // 0.1 m/s noise
+            ukf.updateZUPT(R_vel);
+            zupt_updates++;
+        }
+        
         // Update with CSAC (if available)
         if (csac && csac->hasNewData()) {
             CSACMeasurement csac_meas = csac->read();
@@ -209,7 +315,11 @@ int main(int argc, char** argv) {
         output_file << x.dt << ",";
         output_file << x.df << ",";
         output_file << gradient_updates << ",";
-        output_file << anomaly_updates << "\n";
+        output_file << anomaly_updates << ",";
+        output_file << mag_updates << ",";
+        output_file << baro_updates << ",";
+        output_file << terrain_updates << ",";
+        output_file << zupt_updates << "\n";
         
         // Print status every second
         if (static_cast<int>(t) != static_cast<int>(t - dt)) {
@@ -217,10 +327,10 @@ int main(int argc, char** argv) {
             double drift = pos_error.norm();
             
             std::cout << "t=" << static_cast<int>(t) << "s";
-            std::cout << " | Position: " << lla.x() * 180.0 / M_PI << "°N, " 
-                     << lla.y() * 180.0 / M_PI << "°E, " << lla.z() << "m";
             std::cout << " | Drift: " << drift << "m";
-            std::cout << " | Updates: G=" << gradient_updates << " A=" << anomaly_updates;
+            std::cout << " | G=" << gradient_updates << " A=" << anomaly_updates;
+            std::cout << " M=" << mag_updates << " B=" << baro_updates;
+            std::cout << " T=" << terrain_updates << " Z=" << zupt_updates;
             std::cout << "\n";
         }
         
@@ -239,6 +349,10 @@ int main(int argc, char** argv) {
     std::cout << "Total runtime: " << t << " seconds\n";
     std::cout << "Gradient updates: " << gradient_updates << "\n";
     std::cout << "Anomaly updates: " << anomaly_updates << "\n";
+    std::cout << "Magnetometer updates: " << mag_updates << "\n";
+    std::cout << "Barometer updates: " << baro_updates << "\n";
+    std::cout << "Terrain updates: " << terrain_updates << "\n";
+    std::cout << "ZUPT updates: " << zupt_updates << "\n";
     
     State final_state = ukf.getState();
     Eigen::Vector3d final_error = final_state.p_ECEF - initial_pos;

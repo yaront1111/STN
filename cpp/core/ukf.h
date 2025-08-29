@@ -66,6 +66,28 @@ public:
      */
     void updateAnomaly(double measured, double noise);
     
+    /**
+     * Update with magnetometer (fixes heading drift!)
+     */
+    void updateMagnetometer(const Eigen::Vector3d& mag_body, 
+                           const Eigen::Vector3d& mag_ref_ECEF,
+                           const Eigen::Matrix3d& R_mag);
+    
+    /**
+     * Zero Velocity Update - constrains velocity when stationary
+     */
+    void updateZUPT(const Eigen::Matrix3d& R_vel);
+    
+    /**
+     * Barometric altitude update
+     */
+    void updateBarometer(double pressure_altitude, double noise);
+    
+    /**
+     * Terrain-referenced altitude from radar altimeter
+     */
+    void updateTerrainAltitude(double radar_alt, double terrain_height, double noise);
+    
     State getState() const { return nominal_state_; }
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCovariance() const { return P_; }
     

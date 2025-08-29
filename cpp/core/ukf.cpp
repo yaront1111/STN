@@ -459,3 +459,195 @@ void UKF::updateAnomaly(double measured, double noise) {
     P_ = P_ - K * K.transpose() * S;
     enforcePositiveDefinite(P_);
 }
+
+void UKF::updateMagnetometer(const Eigen::Vector3d& mag_body,
+                             const Eigen::Vector3d& mag_ref_ECEF,
+                             const Eigen::Matrix3d& R_mag) {
+    // Generate sigma points if needed
+    generateSigmaPoints();
+    
+    // Transform sigma points to measurement space
+    std::vector<Eigen::Vector3d> predicted_mag(NUM_SIGMA_POINTS);
+    
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        // Rotate reference field to body frame
+        Eigen::Matrix3d C_B_ECEF = sigma_points_[i].state.q_ECEF_B.toRotationMatrix().transpose();
+        predicted_mag[i] = C_B_ECEF * mag_ref_ECEF;
+    }
+    
+    // Compute mean predicted measurement
+    Eigen::Vector3d mean_mag = Eigen::Vector3d::Zero();
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        mean_mag += weights_mean_(i) * predicted_mag[i];
+    }
+    
+    // Compute innovation covariance
+    Eigen::Matrix3d S = Eigen::Matrix3d::Zero();
+    Eigen::Matrix<double, ERROR_STATE_DIM, 3> T = Eigen::Matrix<double, ERROR_STATE_DIM, 3>::Zero();
+    
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        Eigen::Vector3d mag_diff = predicted_mag[i] - mean_mag;
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_diff = 
+            computeError(sigma_points_[i].state, nominal_state_);
+        
+        S += weights_cov_(i) * mag_diff * mag_diff.transpose();
+        T += weights_cov_(i) * state_diff * mag_diff.transpose();
+    }
+    
+    // Add measurement noise
+    S += R_mag;
+    
+    // Kalman gain
+    Eigen::Matrix<double, ERROR_STATE_DIM, 3> K = T * S.inverse();
+    
+    // Innovation
+    Eigen::Vector3d innovation = mag_body - mean_mag;
+    
+    // State correction
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_correction = K * innovation;
+    
+    // Apply correction (this fixes heading drift!)
+    nominal_state_ = applyError(nominal_state_, state_correction);
+    
+    // Update covariance
+    P_ = P_ - K * S * K.transpose();
+    enforcePositiveDefinite(P_);
+}
+
+void UKF::updateZUPT(const Eigen::Matrix3d& R_vel) {
+    // Zero Velocity Update - constrains velocity to zero when stationary
+    
+    // Generate sigma points if needed
+    generateSigmaPoints();
+    
+    // Predicted velocities (should all be near current velocity)
+    std::vector<Eigen::Vector3d> predicted_vel(NUM_SIGMA_POINTS);
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        predicted_vel[i] = sigma_points_[i].state.v_ECEF;
+    }
+    
+    // Mean velocity
+    Eigen::Vector3d mean_vel = Eigen::Vector3d::Zero();
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        mean_vel += weights_mean_(i) * predicted_vel[i];
+    }
+    
+    // Covariances
+    Eigen::Matrix3d S = Eigen::Matrix3d::Zero();
+    Eigen::Matrix<double, ERROR_STATE_DIM, 3> T = Eigen::Matrix<double, ERROR_STATE_DIM, 3>::Zero();
+    
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        Eigen::Vector3d vel_diff = predicted_vel[i] - mean_vel;
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_diff = 
+            computeError(sigma_points_[i].state, nominal_state_);
+        
+        S += weights_cov_(i) * vel_diff * vel_diff.transpose();
+        T += weights_cov_(i) * state_diff * vel_diff.transpose();
+    }
+    
+    S += R_vel;
+    
+    // Kalman gain
+    Eigen::Matrix<double, ERROR_STATE_DIM, 3> K = T * S.inverse();
+    
+    // Innovation (measured velocity is zero!)
+    Eigen::Vector3d innovation = Eigen::Vector3d::Zero() - mean_vel;
+    
+    // Update
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_correction = K * innovation;
+    nominal_state_ = applyError(nominal_state_, state_correction);
+    
+    P_ = P_ - K * S * K.transpose();
+    enforcePositiveDefinite(P_);
+}
+
+void UKF::updateBarometer(double pressure_altitude, double noise) {
+    // Barometric altitude constrains vertical position
+    generateSigmaPoints();
+    
+    // Predicted altitudes
+    std::vector<double> predicted_alt(NUM_SIGMA_POINTS);
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        Eigen::Vector3d lla = sigma_points_[i].state.toGeodetic();
+        predicted_alt[i] = lla.z();  // altitude in meters
+    }
+    
+    // Mean altitude
+    double mean_alt = 0.0;
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        mean_alt += weights_mean_(i) * predicted_alt[i];
+    }
+    
+    // Covariances
+    double S = 0.0;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> T = Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
+    
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        double alt_diff = predicted_alt[i] - mean_alt;
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_diff = 
+            computeError(sigma_points_[i].state, nominal_state_);
+        
+        S += weights_cov_(i) * alt_diff * alt_diff;
+        T += weights_cov_(i) * state_diff * alt_diff;
+    }
+    
+    S += noise * noise;
+    
+    // Kalman gain
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> K = T / S;
+    
+    // Update
+    double innovation = pressure_altitude - mean_alt;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_correction = K * innovation;
+    
+    nominal_state_ = applyError(nominal_state_, state_correction);
+    P_ = P_ - K * K.transpose() * S;
+    enforcePositiveDefinite(P_);
+}
+
+void UKF::updateTerrainAltitude(double radar_alt, double terrain_height, double noise) {
+    // Terrain correlation: aircraft_alt - terrain_height = radar_alt
+    // This constrains horizontal position!
+    
+    generateSigmaPoints();
+    
+    // Predicted radar altitudes
+    std::vector<double> predicted_radar(NUM_SIGMA_POINTS);
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        Eigen::Vector3d lla = sigma_points_[i].state.toGeodetic();
+        // Aircraft altitude minus terrain at this position
+        predicted_radar[i] = lla.z() - terrain_height;  // Simplified - should lookup terrain
+    }
+    
+    // Mean
+    double mean_radar = 0.0;
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        mean_radar += weights_mean_(i) * predicted_radar[i];
+    }
+    
+    // Covariances
+    double S = 0.0;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> T = Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
+    
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        double radar_diff = predicted_radar[i] - mean_radar;
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_diff = 
+            computeError(sigma_points_[i].state, nominal_state_);
+        
+        S += weights_cov_(i) * radar_diff * radar_diff;
+        T += weights_cov_(i) * state_diff * radar_diff;
+    }
+    
+    S += noise * noise;
+    
+    // Kalman gain
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> K = T / S;
+    
+    // Update
+    double innovation = radar_alt - mean_radar;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_correction = K * innovation;
+    
+    nominal_state_ = applyError(nominal_state_, state_correction);
+    P_ = P_ - K * K.transpose() * S;
+    enforcePositiveDefinite(P_);
+}
