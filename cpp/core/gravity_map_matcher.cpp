@@ -3,6 +3,7 @@
 #include <numeric>
 #include <cmath>
 #include <iostream>
+#include <chrono>
 
 GravityMapMatcher::GravityMapMatcher(const Config& cfg) : cfg_(cfg) {
     signature_buffer_.clear();
@@ -46,13 +47,21 @@ GravityMapMatcher::MatchResult GravityMapMatcher::findMatch(
     // Generate search grid
     auto search_grid = generateSearchGrid(search_center);
     
+    std::cout << "  Search grid size: " << search_grid.size() << " points\n";
+    std::cout << "  Search radius: " << cfg_.search_radius_m << "m\n";
+    std::cout << "  Grid resolution: " << cfg_.grid_resolution_m << "m\n";
+    
     // Track best match
     double best_correlation = -1.0;
     Eigen::Vector3d best_position;
     std::vector<Eigen::Vector3d> best_path;
     
+    int points_evaluated = 0;
+    auto start_time = std::chrono::high_resolution_clock::now();
+    
     // Search each grid point
     for (const auto& grid_point : search_grid) {
+        points_evaluated++;
         // Compute offset from estimated to grid point
         Eigen::Vector3d offset = grid_point - search_center;
         
@@ -80,9 +89,21 @@ GravityMapMatcher::MatchResult GravityMapMatcher::findMatch(
         
         // Early exit if excellent match found
         if (correlation > 0.99) {
+            std::cout << "  Found excellent match early at point " << points_evaluated << "\n";
             break;
         }
+        
+        // Progress report every 100 points
+        if (points_evaluated % 100 == 0) {
+            std::cout << "  Evaluated " << points_evaluated << "/" << search_grid.size() 
+                      << " points, best correlation: " << best_correlation << "\n";
+        }
     }
+    
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    std::cout << "  Search completed in " << duration.count() << "ms\n";
+    std::cout << "  Points evaluated: " << points_evaluated << "/" << search_grid.size() << "\n";
     
     // Check if match is good enough
     if (best_correlation > cfg_.correlation_threshold) {
