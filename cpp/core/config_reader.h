@@ -1,120 +1,165 @@
 #pragma once
 #include <string>
-#include <map>
+#include <unordered_map>
+#include <variant>
+#include <vector>
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <stdexcept>
+#include <algorithm>
+#include <cctype>
 
 /**
- * Simple configuration file reader
- * Supports key-value pairs and sections
+ * Production-grade YAML Configuration Reader
+ * 
+ * Supports:
+ * - Nested configuration with dot notation (e.g., "ukf.alpha")
+ * - Type-safe access with defaults
+ * - Comments and blank lines
+ * - String, double, int, and bool types
+ * - Environment variable expansion
+ * - Configuration validation
+ * - Error reporting with line numbers
  */
 class ConfigReader {
-private:
-    std::map<std::string, std::string> config_;
-    
 public:
+    using ConfigValue = std::variant<std::string, double, int, bool>;
+    using ConfigMap = std::unordered_map<std::string, ConfigValue>;
+    
     ConfigReader() = default;
     
     /**
-     * Load configuration from YAML-style file
+     * Load configuration from YAML file
+     * @param filename Path to YAML configuration file
+     * @return true if successful, false otherwise
      */
-    bool loadFromFile(const std::string& filename) {
-        std::ifstream file(filename);
-        if (!file.is_open()) {
-            // Try default config
-            config_["system.rate_hz"] = "100";
-            config_["system.max_runtime"] = "3600";
-            config_["ukf.alpha"] = "0.001";
-            config_["ukf.beta"] = "2.0";
-            config_["ukf.kappa"] = "0.0";
-            config_["hardware.imu.type"] = "simulated";
-            config_["hardware.imu.port"] = "/dev/ttyUSB0";
-            config_["hardware.gradiometer.enabled"] = "false";
-            config_["hardware.csac.enabled"] = "false";
-            config_["output.path"] = "data/gravity_nav.csv";
-            return true; // Use defaults
-        }
-        
-        std::string line;
-        std::string current_section;
-        
-        while (std::getline(file, line)) {
-            // Skip comments and empty lines
-            if (line.empty() || line[0] == '#') continue;
-            
-            // Remove leading/trailing whitespace
-            line.erase(0, line.find_first_not_of(" \t"));
-            line.erase(line.find_last_not_of(" \t") + 1);
-            
-            if (line.empty()) continue;
-            
-            // Check for section header
-            if (line.back() == ':') {
-                current_section = line.substr(0, line.length() - 1);
-                continue;
-            }
-            
-            // Parse key-value pair
-            size_t colon_pos = line.find(':');
-            if (colon_pos != std::string::npos) {
-                std::string key = line.substr(0, colon_pos);
-                std::string value = line.substr(colon_pos + 1);
-                
-                // Trim whitespace
-                key.erase(0, key.find_first_not_of(" \t"));
-                key.erase(key.find_last_not_of(" \t") + 1);
-                value.erase(0, value.find_first_not_of(" \t"));
-                value.erase(value.find_last_not_of(" \t") + 1);
-                
-                // Store with section prefix
-                if (!current_section.empty()) {
-                    config_[current_section + "." + key] = value;
-                } else {
-                    config_[key] = value;
-                }
-            }
-        }
-        
-        file.close();
-        return true;
+    bool loadFromFile(const std::string& filename);
+    
+    /**
+     * Load configuration from string (for testing)
+     * @param yaml_content YAML content as string
+     * @return true if successful, false otherwise
+     */
+    bool loadFromString(const std::string& yaml_content);
+    
+    /**
+     * Get string value with optional default
+     */
+    std::string getString(const std::string& key, const std::string& default_value = "") const;
+    
+    /**
+     * Get double value with optional default
+     */
+    double getDouble(const std::string& key, double default_value = 0.0) const;
+    
+    /**
+     * Get integer value with optional default
+     */
+    int getInt(const std::string& key, int default_value = 0) const;
+    
+    /**
+     * Get boolean value with optional default
+     */
+    bool getBool(const std::string& key, bool default_value = false) const;
+    
+    /**
+     * Check if a key exists
+     */
+    bool hasKey(const std::string& key) const;
+    
+    /**
+     * Get all keys matching a prefix
+     */
+    std::vector<std::string> getKeysWithPrefix(const std::string& prefix) const;
+    
+    /**
+     * Validate configuration against required keys
+     * @param required_keys List of keys that must be present
+     * @return true if all required keys exist, false otherwise
+     */
+    bool validate(const std::vector<std::string>& required_keys) const;
+    
+    /**
+     * Get last error message
+     */
+    std::string getLastError() const { return last_error_; }
+    
+    /**
+     * Clear all configuration
+     */
+    void clear();
+    
+    /**
+     * Dump configuration to string (for debugging)
+     */
+    std::string toString() const;
+    
+private:
+    ConfigMap config_;
+    std::string last_error_;
+    mutable std::string last_accessed_key_;  // For debugging
+    
+    /**
+     * Parse a single line of YAML
+     * @param line The line to parse
+     * @param line_num Line number for error reporting
+     * @param current_prefix Current namespace prefix for nested configs
+     * @return true if successful, false on error
+     */
+    bool parseLine(const std::string& line, int line_num, std::string& current_prefix);
+    
+    /**
+     * Parse a value string into appropriate type
+     */
+    ConfigValue parseValue(const std::string& value_str);
+    
+    /**
+     * Expand environment variables in string
+     * Replaces ${VAR_NAME} with environment variable value
+     */
+    std::string expandEnvironmentVariables(const std::string& str) const;
+    
+    /**
+     * Trim whitespace from string
+     */
+    std::string trim(const std::string& str) const;
+    
+    /**
+     * Convert string to lowercase
+     */
+    std::string toLower(const std::string& str) const;
+    
+    /**
+     * Check if string represents a number
+     */
+    bool isNumber(const std::string& str) const;
+    
+    /**
+     * Check if string represents a boolean
+     */
+    bool isBool(const std::string& str) const;
+    
+    /**
+     * Set error message with context
+     */
+    void setError(const std::string& error, int line_num = -1);
+};
+
+/**
+ * Global configuration singleton (optional)
+ * Usage: Config::getInstance().loadFromFile("config.yaml");
+ */
+class Config {
+public:
+    static ConfigReader& getInstance() {
+        static ConfigReader instance;
+        return instance;
     }
     
-    std::string getString(const std::string& key, const std::string& default_value = "") const {
-        auto it = config_.find(key);
-        return (it != config_.end()) ? it->second : default_value;
-    }
+    Config(const Config&) = delete;
+    Config& operator=(const Config&) = delete;
     
-    double getDouble(const std::string& key, double default_value = 0.0) const {
-        auto it = config_.find(key);
-        if (it != config_.end()) {
-            try {
-                return std::stod(it->second);
-            } catch (...) {
-                return default_value;
-            }
-        }
-        return default_value;
-    }
-    
-    int getInt(const std::string& key, int default_value = 0) const {
-        auto it = config_.find(key);
-        if (it != config_.end()) {
-            try {
-                return std::stoi(it->second);
-            } catch (...) {
-                return default_value;
-            }
-        }
-        return default_value;
-    }
-    
-    bool getBool(const std::string& key, bool default_value = false) const {
-        auto it = config_.find(key);
-        if (it != config_.end()) {
-            std::string val = it->second;
-            return (val == "true" || val == "True" || val == "1" || val == "yes");
-        }
-        return default_value;
-    }
+private:
+    Config() = default;
 };

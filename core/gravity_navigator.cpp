@@ -12,7 +12,6 @@
 #include "../cpp/core/types.h"
 #include "../cpp/core/ukf.h"
 #include "../cpp/core/gravity_gradient_provider.h"
-#include "../cpp/core/imu_processor.h"
 #include "../cpp/hardware/hardware_interface.h"
 #include "../cpp/hardware/sensor_interfaces.h"
 #include "../cpp/core/config_reader.h"
