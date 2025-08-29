@@ -651,3 +651,38 @@ void UKF::updateTerrainAltitude(double radar_alt, double terrain_height, double 
     P_ = P_ - K * K.transpose() * S;
     enforcePositiveDefinite(P_);
 }
+void UKF::updateGravityMapMatch(const Eigen::Vector3d& matched_position_ECEF,
+                                const Eigen::Matrix3d& R_position) {
+    // This is a direct position measurement - very powerful!
+    // Similar to GPS but using gravity map correlation
+    
+    // H matrix maps state to measurement (position only)
+    Eigen::Matrix<double, 3, ERROR_STATE_DIM> H = 
+        Eigen::Matrix<double, 3, ERROR_STATE_DIM>::Zero();
+    H.block<3,3>(0, POS_IDX) = Eigen::Matrix3d::Identity();
+    
+    // Innovation (position error)
+    Eigen::Vector3d innovation = matched_position_ECEF - nominal_state_.p_ECEF;
+    
+    // Innovation covariance
+    Eigen::Matrix3d S = H * P_ * H.transpose() + R_position;
+    
+    // Kalman gain
+    Eigen::Matrix<double, ERROR_STATE_DIM, 3> K = P_ * H.transpose() * S.inverse();
+    
+    // State correction
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> correction = K * innovation;
+    
+    // Apply correction
+    nominal_state_ = applyError(nominal_state_, correction);
+    
+    // Update covariance - this dramatically reduces position uncertainty!
+    P_ = (Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() - K * H) * P_;
+    
+    // Joseph form for numerical stability
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> I_KH = 
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() - K * H;
+    P_ = I_KH * P_ * I_KH.transpose() + K * R_position * K.transpose();
+    
+    enforcePositiveDefinite(P_);
+}

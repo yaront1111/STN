@@ -88,6 +88,13 @@ public:
      */
     void updateTerrainAltitude(double radar_alt, double terrain_height, double noise);
     
+    /**
+     * Gravity anomaly map matching - provides absolute position fix
+     * This is the KEY to making gravity navigation work!
+     */
+    void updateGravityMapMatch(const Eigen::Vector3d& matched_position_ECEF,
+                               const Eigen::Matrix3d& R_position);
+    
     State getState() const { return nominal_state_; }
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCovariance() const { return P_; }
     
