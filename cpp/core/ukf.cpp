@@ -411,52 +411,36 @@ void UKF::updateGradient(const Eigen::Matrix3d& measured, const Eigen::Matrix3d&
     enforcePositiveDefinite(P_);
 }
 
-void UKF::updateAnomaly(double measured, double noise) {
-    // Similar to gradient update but with scalar measurement
-    std::vector<double> predicted_anomalies(NUM_SIGMA_POINTS);
+void UKF::updateGravityMapMatch(const Eigen::Vector3d& matched_position_ECEF,
+                                const Eigen::Matrix3d& R_position) {
+    // This is a direct position measurement - very powerful!
+    // Similar to GPS but using gravity map correlation
     
-    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
-        // Simple synthetic anomaly
-        Eigen::Vector3d pos = sigma_points_[i].state.p_ECEF;
-        double r = pos.norm();
-        double lat = std::asin(pos.z() / r);
-        predicted_anomalies[i] = 10.0 * std::sin(lat * 10.0);
-    }
+    // H matrix maps state to measurement (position only)
+    Eigen::Matrix<double, 3, ERROR_STATE_DIM> H = 
+        Eigen::Matrix<double, 3, ERROR_STATE_DIM>::Zero();
+    H.block<3,3>(0, POS_IDX) = Eigen::Matrix3d::Identity();
     
-    // Compute mean
-    double mean_anomaly = 0.0;
-    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
-        mean_anomaly += weights_mean_(i) * predicted_anomalies[i];
-    }
+    // Innovation (position error)
+    Eigen::Vector3d innovation = matched_position_ECEF - nominal_state_.p_ECEF;
     
-    // Compute covariances
-    double S = 0.0;
-    Eigen::Matrix<double, ERROR_STATE_DIM, 1> T = Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
-    
-    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
-        double anomaly_diff = predicted_anomalies[i] - mean_anomaly;
-        Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_diff = 
-            computeError(sigma_points_[i].state, nominal_state_);
-        
-        S += weights_cov_(i) * anomaly_diff * anomaly_diff;
-        T += weights_cov_(i) * state_diff * anomaly_diff;
-    }
-    
-    // Add measurement noise
-    S += noise * noise;
+    // Innovation covariance
+    Eigen::Matrix3d S = H * P_ * H.transpose() + R_position;
     
     // Kalman gain
-    Eigen::Matrix<double, ERROR_STATE_DIM, 1> K = T / S;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 3> K = P_ * H.transpose() * S.inverse();
     
-    // Update
-    double innovation = measured - mean_anomaly;
-    Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_correction = K * innovation;
+    // State correction
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> correction = K * innovation;
     
     // Apply correction
-    nominal_state_ = applyError(nominal_state_, state_correction);
+    nominal_state_ = applyError(nominal_state_, correction);
     
-    // Update covariance
-    P_ = P_ - K * K.transpose() * S;
+    // Joseph form for numerical stability
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> I_KH = 
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() - K * H;
+    P_ = I_KH * P_ * I_KH.transpose() + K * R_position * K.transpose();
+    
     enforcePositiveDefinite(P_);
 }
 
@@ -514,6 +498,55 @@ void UKF::updateMagnetometer(const Eigen::Vector3d& mag_body,
     enforcePositiveDefinite(P_);
 }
 
+void UKF::updateAnomaly(double measured, double noise) {
+    // Similar to gradient update but with scalar measurement
+    std::vector<double> predicted_anomalies(NUM_SIGMA_POINTS);
+    
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        // Simple synthetic anomaly
+        Eigen::Vector3d pos = sigma_points_[i].state.p_ECEF;
+        double r = pos.norm();
+        double lat = std::asin(pos.z() / r);
+        predicted_anomalies[i] = 10.0 * std::sin(lat * 10.0);
+    }
+    
+    // Compute mean
+    double mean_anomaly = 0.0;
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        mean_anomaly += weights_mean_(i) * predicted_anomalies[i];
+    }
+    
+    // Compute covariances
+    double S = 0.0;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> T = Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
+    
+    for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
+        double anomaly_diff = predicted_anomalies[i] - mean_anomaly;
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_diff = 
+            computeError(sigma_points_[i].state, nominal_state_);
+        
+        S += weights_cov_(i) * anomaly_diff * anomaly_diff;
+        T += weights_cov_(i) * state_diff * anomaly_diff;
+    }
+    
+    // Add measurement noise
+    S += noise * noise;
+    
+    // Kalman gain
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> K = T / S;
+    
+    // Update
+    double innovation = measured - mean_anomaly;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_correction = K * innovation;
+    
+    // Apply correction
+    nominal_state_ = applyError(nominal_state_, state_correction);
+    
+    // Update covariance
+    P_ = P_ - K * K.transpose() * S;
+    enforcePositiveDefinite(P_);
+}
+
 void UKF::updateZUPT(const Eigen::Matrix3d& R_vel) {
     // Zero Velocity Update - constrains velocity to zero when stationary
     
@@ -568,8 +601,9 @@ void UKF::updateBarometer(double pressure_altitude, double noise) {
     // Predicted altitudes
     std::vector<double> predicted_alt(NUM_SIGMA_POINTS);
     for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
-        Eigen::Vector3d lla = sigma_points_[i].state.toGeodetic();
-        predicted_alt[i] = lla.z();  // altitude in meters
+        // Simple altitude calculation (would need proper geodetic conversion)
+        double r = sigma_points_[i].state.p_ECEF.norm();
+        predicted_alt[i] = r - 6378137.0;  // Simplified altitude
     }
     
     // Mean altitude
@@ -614,9 +648,10 @@ void UKF::updateTerrainAltitude(double radar_alt, double terrain_height, double 
     // Predicted radar altitudes
     std::vector<double> predicted_radar(NUM_SIGMA_POINTS);
     for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
-        Eigen::Vector3d lla = sigma_points_[i].state.toGeodetic();
-        // Aircraft altitude minus terrain at this position
-        predicted_radar[i] = lla.z() - terrain_height;  // Simplified - should lookup terrain
+        // Simple altitude calculation
+        double r = sigma_points_[i].state.p_ECEF.norm();
+        double aircraft_alt = r - 6378137.0;  // Simplified
+        predicted_radar[i] = aircraft_alt - terrain_height;
     }
     
     // Mean
@@ -649,40 +684,5 @@ void UKF::updateTerrainAltitude(double radar_alt, double terrain_height, double 
     
     nominal_state_ = applyError(nominal_state_, state_correction);
     P_ = P_ - K * K.transpose() * S;
-    enforcePositiveDefinite(P_);
-}
-void UKF::updateGravityMapMatch(const Eigen::Vector3d& matched_position_ECEF,
-                                const Eigen::Matrix3d& R_position) {
-    // This is a direct position measurement - very powerful!
-    // Similar to GPS but using gravity map correlation
-    
-    // H matrix maps state to measurement (position only)
-    Eigen::Matrix<double, 3, ERROR_STATE_DIM> H = 
-        Eigen::Matrix<double, 3, ERROR_STATE_DIM>::Zero();
-    H.block<3,3>(0, POS_IDX) = Eigen::Matrix3d::Identity();
-    
-    // Innovation (position error)
-    Eigen::Vector3d innovation = matched_position_ECEF - nominal_state_.p_ECEF;
-    
-    // Innovation covariance
-    Eigen::Matrix3d S = H * P_ * H.transpose() + R_position;
-    
-    // Kalman gain
-    Eigen::Matrix<double, ERROR_STATE_DIM, 3> K = P_ * H.transpose() * S.inverse();
-    
-    // State correction
-    Eigen::Matrix<double, ERROR_STATE_DIM, 1> correction = K * innovation;
-    
-    // Apply correction
-    nominal_state_ = applyError(nominal_state_, correction);
-    
-    // Update covariance - this dramatically reduces position uncertainty!
-    P_ = (Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() - K * H) * P_;
-    
-    // Joseph form for numerical stability
-    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> I_KH = 
-        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() - K * H;
-    P_ = I_KH * P_ * I_KH.transpose() + K * R_position * K.transpose();
-    
     enforcePositiveDefinite(P_);
 }
