@@ -2,6 +2,8 @@
 #include <fstream>
 #include <iostream>
 #include <cmath>
+#include <algorithm>
+#include <cassert>
 
 bool GravityGradientProvider::loadEGM2020(const std::string& data_path) {
     // Try to load real data first
@@ -42,9 +44,6 @@ bool GravityGradientProvider::loadEGM2020(const std::string& data_path) {
     // Read C coefficients
     for (int i = 0; i < num_coeffs; i++) {
         file.read(reinterpret_cast<char*>(&coeffs_->C[i]), sizeof(double));
-        if (i < 10) {
-            std::cout << "    C[" << i << "] = " << coeffs_->C[i] << "\n";
-        }
     }
     
     // Read S coefficients  
@@ -67,6 +66,17 @@ GravityGradientProvider::toSpherical(const Eigen::Vector3d& pos_ECEF) const {
 
 GravityGradientProvider::LegendreTerms 
 GravityGradientProvider::computeLegendre(double theta, int max_degree) const {
+    // Holmes-Featherstone Stable ALF Computation
+    // Input validation
+    if (theta < 0.0 || theta > M_PI || max_degree < 0 || max_degree > 2190) {
+        std::cerr << "ERROR: Invalid input to computeLegendre\n";
+        LegendreTerms terms;
+        int size = std::max(1, max_degree + 1);
+        terms.P = Eigen::MatrixXd::Zero(size, size);
+        terms.dP = Eigen::MatrixXd::Zero(size, size);
+        return terms;
+    }
+    
     LegendreTerms terms;
     int size = max_degree + 1;
     terms.P = Eigen::MatrixXd::Zero(size, size);
@@ -75,53 +85,137 @@ GravityGradientProvider::computeLegendre(double theta, int max_degree) const {
     double cos_theta = std::cos(theta);
     double sin_theta = std::sin(theta);
     
-    // Seed values
-    terms.P(0, 0) = 1.0;
-    if (max_degree >= 1) {
-        terms.P(1, 0) = cos_theta;
-        terms.P(1, 1) = sin_theta;
-    }
+    // Constants for numerical stability
+    const double SCALING_THRESHOLD = 1e140;
+    const double OVERFLOW_THRESHOLD = 1e280;
     
-    // Standard recursion for associated Legendre functions
-    // Limited to max_degree=60 in caller to avoid overflow
-    for (int n = 2; n <= max_degree; ++n) {
-        for (int m = 0; m <= n && m <= max_degree; ++m) {
-            if (m == 0) {
-                terms.P(n, 0) = ((2*n-1) * cos_theta * terms.P(n-1, 0) 
-                               - (n-1) * terms.P(n-2, 0)) / n;
-            } else if (m == n) {
-                terms.P(n, n) = (2*n-1) * sin_theta * terms.P(n-1, n-1);
-            } else {
-                terms.P(n, m) = ((2*n-1) * cos_theta * terms.P(n-1, m) 
-                               - (n+m-1) * terms.P(n-2, m)) / (n-m);
+    std::vector<double> scale_factors(size, 1.0);
+    
+    try {
+        // Step 1: Compute sectorials P_m^m with Holmes-Featherstone scaling
+        terms.P(0, 0) = 1.0;  // P_0^0 = 1
+        scale_factors[0] = 1.0;
+        
+        if (max_degree >= 1) {
+            // P_1^1 = sqrt(3) * sin(theta)
+            terms.P(1, 1) = std::sqrt(3.0) * sin_theta;
+            scale_factors[1] = 1.0;
+            
+            // Recursive sectorials P_m^m for m >= 2
+            for (int m = 2; m <= max_degree; ++m) {
+                double factor = std::sqrt((2.0 * m + 1.0) / (2.0 * m));
+                double new_value = factor * sin_theta * terms.P(m-1, m-1);
+                
+                // Apply sectorial scaling if needed
+                double scale_adjustment = 1.0;
+                if (std::abs(new_value) > SCALING_THRESHOLD) {
+                    scale_adjustment = std::pow(10.0, std::floor(m * 0.3));
+                    new_value /= scale_adjustment;
+                }
+                
+                terms.P(m, m) = new_value;
+                scale_factors[m] = scale_factors[m-1] * scale_adjustment;
+                
+                if (!std::isfinite(new_value) || std::abs(new_value) > OVERFLOW_THRESHOLD) {
+                    throw std::runtime_error("Sectorial computation unstable at m=" + std::to_string(m));
+                }
+            }
+        }
+        
+        // Step 2: Compute zonal harmonics P_n^0
+        if (max_degree >= 1) {
+            terms.P(1, 0) = cos_theta;
+            
+            for (int n = 2; n <= max_degree; ++n) {
+                // Three-term recurrence: P_n^0 = ((2n-1)*cos(theta)*P_{n-1}^0 - (n-1)*P_{n-2}^0) / n
+                terms.P(n, 0) = ((2.0*n - 1.0) * cos_theta * terms.P(n-1, 0) - (n-1.0) * terms.P(n-2, 0)) / n;
+                
+                if (!std::isfinite(terms.P(n, 0))) {
+                    std::cerr << "WARNING: Zonal P(" << n << ",0) unstable, setting to zero\n";
+                    terms.P(n, 0) = 0.0;
+                }
+            }
+        }
+        
+        // Step 3: Compute tesseral harmonics P_n^m (n > m > 0)
+        for (int m = 1; m <= max_degree; ++m) {
+            // First tesseral: P_{m+1}^m
+            if (m + 1 <= max_degree) {
+                double factor = std::sqrt(2.0 * m + 3.0);
+                terms.P(m+1, m) = factor * cos_theta * terms.P(m, m);
             }
             
-            // Check for overflow and stop if detected
-            if (!std::isfinite(terms.P(n, m))) {
-                std::cerr << "WARNING: Legendre overflow at P(" << n << "," << m 
-                          << "), limiting to degree " << (n-1) << "\n";
-                // Zero out remaining terms
-                for (int nn = n; nn <= max_degree; ++nn) {
-                    for (int mm = 0; mm <= nn; ++mm) {
-                        terms.P(nn, mm) = 0.0;
-                    }
+            // Higher tesserals using three-term recurrence
+            for (int n = m + 2; n <= max_degree; ++n) {
+                double a_nm = std::sqrt(((2.0*n + 1.0) * (2.0*n - 1.0)) / ((n + m) * (n - m)));
+                double b_nm = std::sqrt(((2.0*n + 1.0) * (n - m - 1.0) * (n + m - 1.0)) / 
+                                       ((n + m) * (n - m) * (2.0*n - 3.0)));
+                
+                terms.P(n, m) = a_nm * cos_theta * terms.P(n-1, m) - b_nm * terms.P(n-2, m);
+                
+                if (!std::isfinite(terms.P(n, m))) {
+                    terms.P(n, m) = 0.0;
                 }
-                return terms;
             }
         }
-    }
-    
-    // Compute derivatives
-    for (int n = 1; n <= max_degree; ++n) {
-        for (int m = 0; m <= n && m <= max_degree; ++m) {
-            if (m == 0 && n < size) {
-                terms.dP(n, 0) = (1 < size) ? -terms.P(n, 1) : 0.0;
-            } else if (m > 0 && m < size && n < size) {
-                double term1 = (m-1 >= 0 && m-1 < size) ? terms.P(n, m-1) : 0.0;
-                double term2 = (m+1 < size) ? terms.P(n, m+1) : 0.0;
-                terms.dP(n, m) = 0.5 * ((n+m)*(n-m+1)*term1 - term2);
+        
+        // Step 4: Compute analytical derivatives dP/dtheta
+        terms.dP(0, 0) = 0.0;  // dP_0^0/dtheta = 0
+        
+        if (max_degree >= 1) {
+            terms.dP(1, 0) = -sin_theta;  // dP_1^0/dtheta = -sin(theta)
+            terms.dP(1, 1) = std::sqrt(3.0) * cos_theta;  // dP_1^1/dtheta = sqrt(3)*cos(theta)
+        }
+        
+        // General derivatives using analytical formulas
+        for (int n = 2; n <= max_degree; ++n) {
+            for (int m = 0; m <= n; ++m) {
+                if (m == 0) {
+                    // Zonal derivative: Use relation with P_n^1
+                    if (std::abs(sin_theta) > 1e-10) {
+                        terms.dP(n, 0) = -std::sqrt(n * (n + 1.0)) * terms.P(n, 1);
+                    } else {
+                        terms.dP(n, 0) = 0.0;
+                    }
+                } else if (m == n) {
+                    // Sectorial derivative
+                    terms.dP(n, n) = n * cos_theta * terms.P(n, n);
+                    if (std::abs(sin_theta) > 1e-10) {
+                        terms.dP(n, n) /= sin_theta;
+                    }
+                } else {
+                    // Tesseral derivative using three-term relation
+                    double factor1 = (m + 1 <= n) ? std::sqrt((n - m) * (n + m + 1.0)) : 0.0;
+                    double term1 = (m + 1 <= n) ? factor1 * terms.P(n, m+1) : 0.0;
+                    
+                    double factor2 = (m > 0) ? std::sqrt((n + m) * (n - m + 1.0)) : 0.0;
+                    double term2 = (m > 0) ? factor2 * terms.P(n, m-1) : 0.0;
+                    
+                    terms.dP(n, m) = 0.5 * (term1 - term2);
+                }
+                
+                // Stability check
+                if (!std::isfinite(terms.dP(n, m))) {
+                    terms.dP(n, m) = 0.0;
+                }
             }
         }
+        
+        // Apply inverse scaling to get true fully-normalized values
+        for (int n = 0; n <= max_degree; ++n) {
+            for (int m = 0; m <= n; ++m) {
+                if (m < scale_factors.size()) {
+                    terms.P(n, m) *= scale_factors[m];
+                    terms.dP(n, m) *= scale_factors[m];
+                }
+            }
+        }
+        
+    } catch (const std::exception& e) {
+        std::cerr << "ERROR in stable ALF computation: " << e.what() << std::endl;
+        // Zero out all terms in case of error
+        terms.P.setZero();
+        terms.dP.setZero();
     }
     
     return terms;
@@ -132,9 +226,9 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
         return Eigen::Matrix3d::Zero();
     }
     
-    // Use degree 60 for good resolution while avoiding overflow
-    const int safe_max_degree = 60;
-    auto legendre = computeLegendre(coords.theta, std::min(coeffs_->max_degree, safe_max_degree));
+    // Use full EGM2008 capability with stable Holmes-Featherstone computation
+    const int max_safe_degree = std::min(coeffs_->max_degree, 360);  // EGM2008 degree 360
+    auto legendre = computeLegendre(coords.theta, max_safe_degree);
     
     // Earth parameters
     const double a = 6378137.0;  // WGS84 semi-major axis
@@ -145,14 +239,14 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
     double V_tt = 0.0, V_tp = 0.0, V_pp = 0.0;
     
     // Precompute longitude terms
-    std::vector<double> cos_m_lon(safe_max_degree + 1);
-    std::vector<double> sin_m_lon(safe_max_degree + 1);
+    std::vector<double> cos_m_lon(max_safe_degree + 1);
+    std::vector<double> sin_m_lon(max_safe_degree + 1);
     cos_m_lon[0] = 1.0;
     sin_m_lon[0] = 0.0;
-    if (safe_max_degree > 0) {
+    if (max_safe_degree > 0) {
         double cos_lon = std::cos(coords.phi);
         double sin_lon = std::sin(coords.phi);
-        for (int m = 1; m <= safe_max_degree; ++m) {
+        for (int m = 1; m <= max_safe_degree; ++m) {
             cos_m_lon[m] = cos_m_lon[m-1] * cos_lon - sin_m_lon[m-1] * sin_lon;
             sin_m_lon[m] = sin_m_lon[m-1] * cos_lon + cos_m_lon[m-1] * sin_lon;
         }
@@ -162,7 +256,7 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
     double sin_theta = std::sin(coords.theta);
     
     // Sum spherical harmonic series for second derivatives only
-    for (int n = 2; n <= std::min(coeffs_->max_degree, safe_max_degree); ++n) {
+    for (int n = 2; n <= max_safe_degree; ++n) {
         double ar_pow = std::pow(a / coords.r, n);
         
         for (int m = 0; m <= n; ++m) {

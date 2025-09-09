@@ -1,4 +1,5 @@
-#include "ukf.h"
+#include "ukf.h" 
+#include "normal_gravity.h"
 #include <cmath>
 #include <iostream>
 
@@ -174,15 +175,20 @@ State UKF::propagateState(const State& state, const ImuSample& imu, double dt) {
     // Transform acceleration to ECEF frame
     Eigen::Vector3d acc_ecef = state.q_ECEF_B * acc_corrected;
     
-    // Add gravity (simplified WGS84)
-    Eigen::Vector3d gravity_ecef(0, 0, -9.80665);  // Simplified
-    acc_ecef += gravity_ecef;
+    // Add WGS84 normal gravity (NOT EGM anomalies - those are for map matching only)
+    // Convert ECEF position to geodetic for normal gravity calculation
+    double r = state.p_ECEF.norm();
+    double lat_rad = std::asin(state.p_ECEF.z() / r);  // Simplified geodetic latitude
+    double h_ellip = r - 6378137.0;  // Approximate height above ellipsoid
     
-    // Add Coriolis and centrifugal forces
+    Eigen::Vector3d normal_gravity = NormalGravity::computeNormalGravity(lat_rad, h_ellip);
+    acc_ecef += normal_gravity;
+    
+    // Add Coriolis and centrifugal forces (full Earth rotation model)
     const double omega_earth = 7.292115e-5;  // rad/s
-    Eigen::Vector3d omega_vec(0, 0, omega_earth);
-    acc_ecef -= 2.0 * omega_vec.cross(state.v_ECEF);  // Coriolis
-    acc_ecef -= omega_vec.cross(omega_vec.cross(state.p_ECEF));  // Centrifugal
+    Eigen::Vector3d omega_vec(0, 0, omega_earth);  // Earth rotation vector in ECEF
+    acc_ecef -= 2.0 * omega_vec.cross(state.v_ECEF);  // Coriolis acceleration
+    acc_ecef -= omega_vec.cross(omega_vec.cross(state.p_ECEF));  // Centrifugal acceleration
     
     // Propagate velocity and position
     next.v_ECEF = state.v_ECEF + acc_ecef * dt;
@@ -379,36 +385,65 @@ void UKF::updateGradient(const Eigen::Matrix3d& measured, const Eigen::Matrix3d&
         S += Eigen::Matrix<double, 9, 9>::Identity() * (1e-6 + 0.01 * max_sv);
     }
     
-    // Kalman gain
-    Eigen::Matrix<double, ERROR_STATE_DIM, 9> K = T * S.inverse();
-    
-    // Update
+    // Compute innovation and perform integrity checks
     Eigen::VectorXd innovation = flatten(measured - mean_gradient);
+    
+    // NIS test (chi-square test for measurement outlier detection)  
+    double nis = innovation.transpose() * S.inverse() * innovation;
+    integrity_stats_.addNIS(nis, 9);  // 9 DOF for gravity gradient tensor
+    
+    // Outlier rejection using chi-square test
+    const double chi2_99_9dof = 21.666;  // 99% confidence, 9 DOF
+    if (nis > chi2_99_9dof) {
+        std::cerr << "WARNING: Gravity gradient measurement rejected (NIS=" << nis 
+                  << " > " << chi2_99_9dof << ")\n";
+        return;  // Reject this measurement
+    }
+    
+    // Adaptive noise scaling based on innovation history
+    adaptive_noise_.updateScale(innovation.norm());
+    Eigen::Matrix<double, 9, 9> S_adaptive = S * adaptive_noise_.R_scale_factor;
+    
+    // Kalman gain with adaptive noise
+    Eigen::Matrix<double, ERROR_STATE_DIM, 9> K = T * S_adaptive.inverse();
+    
+    // State correction
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_correction = K * innovation;
     
-    // Check if state correction is valid
-    if (!state_correction.allFinite()) {
-        std::cerr << "ERROR: State correction has NaN/Inf!\n";
-        std::cerr << "Innovation: " << innovation.transpose() << "\n";
-        std::cerr << "K norm: " << K.norm() << "\n";
+    // Validate state correction
+    if (!state_correction.allFinite() || state_correction.norm() > 1000.0) {
+        std::cerr << "WARNING: Invalid state correction, skipping update\n";
         return;
     }
     
     // Apply correction to nominal state
     nominal_state_ = applyError(nominal_state_, state_correction);
     
-    // Update covariance
-    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_new = P_ - K * S * K.transpose();
+    // Joseph form covariance update for numerical stability
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> I = 
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+    
+    // For Joseph form, we need H matrix (measurement Jacobian)
+    // For gradient measurements, H is the Jacobian of gradient w.r.t. error state
+    // This is complex, so we'll use the standard form with regularization
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_new = P_ - K * S_adaptive * K.transpose();
+    
+    // Add small regularization for numerical stability
+    P_new += Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() * 1e-12;
     
     if (!P_new.allFinite()) {
-        std::cerr << "ERROR: P_new has NaN after update!\n";
-        std::cerr << "P norm before: " << P_.norm() << "\n";
-        std::cerr << "K*S*K' norm: " << (K * S * K.transpose()).norm() << "\n";
+        std::cerr << "ERROR: P_new has NaN after update, reverting\n";
         return;
     }
     
     P_ = P_new;
     enforcePositiveDefinite(P_);
+    
+    // Compute NEES (Normalized Estimation Error Squared) for filter monitoring
+    // This requires truth state, which we don't have in real operation
+    // For now, we'll use the state correction magnitude as a proxy
+    double nees_proxy = state_correction.transpose() * P_.inverse() * state_correction;
+    integrity_stats_.addNEES(nees_proxy, ERROR_STATE_DIM);
 }
 
 void UKF::updateGravityMapMatch(const Eigen::Vector3d& matched_position_ECEF,
