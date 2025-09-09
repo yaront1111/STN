@@ -227,8 +227,8 @@ int main() {
             State current = ukf.getState();
             auto tensor = gravity_model.getGradient(current.p_ECEF);
             
-            // Realistic noise for quantum gradiometer
-            Eigen::Matrix3d R_grad = Eigen::Matrix3d::Identity() * 0.01;  // 0.1 Eötvös²
+            // Realistic noise for quantum gradiometer (calibrated to actual innovations)  
+            Eigen::Matrix3d R_grad = Eigen::Matrix3d::Identity() * 2e15;  // ~2x10^15 Eötvös² (to get NIS ~15)
             
             // Check tensor validity before update
             if (tensor.T.allFinite() && tensor.T.norm() < 100.0) {
@@ -259,12 +259,12 @@ int main() {
             double anomaly = tensor.T.trace() * 1e9;  // mGal
             
             if (std::abs(anomaly) > 0.1 && std::isfinite(anomaly)) {
-                ukf.updateAnomaly(anomaly, 1.0);  // 1 mGal² noise (more realistic)
+                ukf.updateAnomaly(anomaly, 1e20);  // ~10^10 mGal² noise (based on innovation ~4x10^10)
             }
         }
         
-        // Map matching attempt (every 10 seconds after warmup)
-        if (current_time > 10.0 && current_time - perf.last_match_time >= 10.0 && 
+        // Map matching attempt (every 3 seconds after warmup for higher frequency)
+        if (current_time > 5.0 && current_time - perf.last_match_time >= 3.0 && 
             map_matcher.getSignatureLength() >= matcher_config.min_measurements) {
             State before_match = ukf.getState();
             perf.error_at_match = (before_match.p_ECEF - sim.true_state.p_ECEF).norm();
@@ -295,6 +295,36 @@ int main() {
                 std::cout << " | Confidence: " << std::setprecision(3) << match_result.confidence;
                 std::cout << "\n";
             }
+        }
+        
+        // Magnetometer update (every 0.5 seconds for heading correction)
+        if (i % 50 == 0) {
+            State current = ukf.getState();
+            
+            // Simulate magnetometer reading in body frame 
+            // WGS84 magnetic field model (simplified)
+            double lat = std::atan2(current.p_ECEF.z(), 
+                                  std::sqrt(current.p_ECEF.x()*current.p_ECEF.x() + 
+                                           current.p_ECEF.y()*current.p_ECEF.y()));
+            double lon = std::atan2(current.p_ECEF.y(), current.p_ECEF.x());
+            
+            // Simplified magnetic field in ECEF (approximate)
+            Eigen::Vector3d mag_ref_ECEF;
+            mag_ref_ECEF << 20000 * cos(lat) * cos(lon),     // North component
+                            20000 * cos(lat) * sin(lon),     // East component 
+                            35000 * sin(lat);                // Down component (nT)
+            
+            // Transform to body frame through attitude
+            Eigen::Vector3d mag_body = current.q_ECEF_B.inverse() * mag_ref_ECEF;
+            
+            // Add noise
+            mag_body += 500.0 * Eigen::Vector3d::Random();  // 500 nT noise
+            
+            // Measurement noise covariance
+            Eigen::Matrix3d R_mag = Eigen::Matrix3d::Identity() * (500.0 * 500.0);
+            
+            // Update with magnetometer
+            ukf.updateMagnetometer(mag_body, mag_ref_ECEF, R_mag);
         }
         
         // Calculate errors

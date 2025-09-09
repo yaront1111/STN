@@ -344,21 +344,23 @@ void UKF::updateGradient(const Eigen::Matrix3d& measured, const Eigen::Matrix3d&
         mean_gradient += weights_mean_(i) * predicted_gradients[i];
     }
     
-    // Flatten for covariance calculations
+    // Flatten for robust update
     auto flatten = [](const Eigen::Matrix3d& m) {
         Eigen::VectorXd v(9);
         v << m(0,0), m(0,1), m(0,2), m(1,0), m(1,1), m(1,2), m(2,0), m(2,1), m(2,2);
         return v;
     };
     
-    // Compute innovation covariance
+    // Set up measurement vectors and Jacobian for robust update
+    Eigen::VectorXd z_meas = flatten(measured);
+    Eigen::VectorXd z_pred = flatten(mean_gradient);
+    
+    // Compute measurement covariance and cross-covariance using sigma points
     Eigen::Matrix<double, 9, 9> S = Eigen::Matrix<double, 9, 9>::Zero();
     Eigen::Matrix<double, ERROR_STATE_DIM, 9> T = Eigen::Matrix<double, ERROR_STATE_DIM, 9>::Zero();
     
-    Eigen::VectorXd mean_grad_vec = flatten(mean_gradient);
-    
     for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
-        Eigen::VectorXd grad_diff = flatten(predicted_gradients[i]) - mean_grad_vec;
+        Eigen::VectorXd grad_diff = flatten(predicted_gradients[i]) - z_pred;
         Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_diff = 
             computeError(sigma_points_[i].state, nominal_state_);
         
@@ -366,84 +368,56 @@ void UKF::updateGradient(const Eigen::Matrix3d& measured, const Eigen::Matrix3d&
         T += weights_cov_(i) * state_diff * grad_diff.transpose();
     }
     
+    // For UKF, we use cross-covariance directly (no explicit Jacobian needed)
+    // The measurement Jacobian H is implicitly computed via T * S^{-1}
+    
     // Add measurement noise
-    Eigen::Matrix<double, 9, 9> R_diag = Eigen::Matrix<double, 9, 9>::Zero();
-    R_diag.diagonal() = flatten(R);
-    S += R_diag;
+    Eigen::Matrix<double, 9, 9> R_flat = Eigen::Matrix<double, 9, 9>::Zero();
+    R_flat.diagonal() = flatten(R);
+    S += R_flat;
     
-    // Check if S is invertible
+    // Innovation and NIS check
+    Eigen::VectorXd innovation = z_meas - z_pred;
+    
+    // Check matrix conditioning
     Eigen::JacobiSVD<Eigen::Matrix<double, 9, 9>> svd(S);
-    double min_sv = svd.singularValues().minCoeff();
-    double max_sv = svd.singularValues().maxCoeff();
-    double cond = (min_sv > 0) ? max_sv / min_sv : 1e12;
-    
-    if (cond > 1e8 || !S.allFinite() || min_sv < 1e-12) {
-        std::cerr << "WARNING: S matrix poorly conditioned. Condition: " << cond 
-                  << ", min SV: " << min_sv << ", max SV: " << max_sv << "\n";
-        std::cerr << "T norm: " << T.norm() << ", S norm: " << S.norm() << "\n";
-        // Regularize S
-        S += Eigen::Matrix<double, 9, 9>::Identity() * (1e-6 + 0.01 * max_sv);
+    if (svd.singularValues().minCoeff() < 1e-12) {
+        std::cerr << "WARNING: S matrix singular, adding regularization\n";
+        S += Eigen::Matrix<double, 9, 9>::Identity() * 1e-6;
     }
     
-    // Compute innovation and perform integrity checks
-    Eigen::VectorXd innovation = flatten(measured - mean_gradient);
+    // Compute NIS for gating
+    double nis = (innovation.transpose() * S.inverse() * innovation)(0,0);
+    double threshold = IntegrityMonitor::getChiSquareThreshold(9);
     
-    // NIS test (chi-square test for measurement outlier detection)  
-    double nis = innovation.transpose() * S.inverse() * innovation;
-    integrity_stats_.addNIS(nis, 9);  // 9 DOF for gravity gradient tensor
+    std::cout << "Gradient NIS=" << nis << " vs threshold=" << threshold 
+              << " (innovation_norm=" << innovation.norm() << ")\n";
     
-    // Outlier rejection using chi-square test
-    const double chi2_99_9dof = 21.666;  // 99% confidence, 9 DOF
-    if (nis > chi2_99_9dof) {
-        std::cerr << "WARNING: Gravity gradient measurement rejected (NIS=" << nis 
-                  << " > " << chi2_99_9dof << ")\n";
-        return;  // Reject this measurement
+    // Chi-square gating
+    if (nis > threshold) {
+        std::cout << "Gradient measurement rejected by chi-square gate\n";
+        return;
     }
     
-    // Adaptive noise scaling based on innovation history
-    adaptive_noise_.updateScale(innovation.norm());
-    Eigen::Matrix<double, 9, 9> S_adaptive = S * adaptive_noise_.R_scale_factor;
-    
-    // Kalman gain with adaptive noise
-    Eigen::Matrix<double, ERROR_STATE_DIM, 9> K = T * S_adaptive.inverse();
-    
-    // State correction
+    // UKF update using cross-covariance
+    Eigen::Matrix<double, ERROR_STATE_DIM, 9> K = T * S.inverse();
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_correction = K * innovation;
     
-    // Validate state correction
-    if (!state_correction.allFinite() || state_correction.norm() > 1000.0) {
-        std::cerr << "WARNING: Invalid state correction, skipping update\n";
-        return;
-    }
-    
-    // Apply correction to nominal state
+    // Apply state correction
     nominal_state_ = applyError(nominal_state_, state_correction);
     
-    // Joseph form covariance update for numerical stability
+    // Joseph form covariance update
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> I = 
         Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+    P_ = I * P_ * I.transpose() - K * S * K.transpose();
     
-    // For Joseph form, we need H matrix (measurement Jacobian)
-    // For gradient measurements, H is the Jacobian of gradient w.r.t. error state
-    // This is complex, so we'll use the standard form with regularization
-    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_new = P_ - K * S_adaptive * K.transpose();
-    
-    // Add small regularization for numerical stability
-    P_new += Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() * 1e-12;
-    
-    if (!P_new.allFinite()) {
-        std::cerr << "ERROR: P_new has NaN after update, reverting\n";
-        return;
-    }
-    
-    P_ = P_new;
+    // Ensure positive definiteness
     enforcePositiveDefinite(P_);
     
-    // Compute NEES (Normalized Estimation Error Squared) for filter monitoring
-    // This requires truth state, which we don't have in real operation
-    // For now, we'll use the state correction magnitude as a proxy
-    double nees_proxy = state_correction.transpose() * P_.inverse() * state_correction;
-    integrity_stats_.addNEES(nees_proxy, ERROR_STATE_DIM);
+    // Update integrity statistics
+    integrity_stats_.addNIS(nis, 9);
+    
+    std::cout << "Gradient update accepted (NIS=" << nis << ")\n";
 }
 
 void UKF::updateGravityMapMatch(const Eigen::Vector3d& matched_position_ECEF,
@@ -551,9 +525,9 @@ void UKF::updateAnomaly(double measured, double noise) {
         mean_anomaly += weights_mean_(i) * predicted_anomalies[i];
     }
     
-    // Compute covariances
+    // Compute measurement Jacobian using sigma points
+    Eigen::Matrix<double, 1, ERROR_STATE_DIM> H = Eigen::Matrix<double, 1, ERROR_STATE_DIM>::Zero();
     double S = 0.0;
-    Eigen::Matrix<double, ERROR_STATE_DIM, 1> T = Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
     
     for (int i = 0; i < NUM_SIGMA_POINTS; ++i) {
         double anomaly_diff = predicted_anomalies[i] - mean_anomaly;
@@ -561,25 +535,42 @@ void UKF::updateAnomaly(double measured, double noise) {
             computeError(sigma_points_[i].state, nominal_state_);
         
         S += weights_cov_(i) * anomaly_diff * anomaly_diff;
-        T += weights_cov_(i) * state_diff * anomaly_diff;
+        H += weights_cov_(i) * anomaly_diff * state_diff.transpose();
     }
     
-    // Add measurement noise
-    S += noise * noise;
+    // Base measurement noise
+    Eigen::Matrix<double, 1, 1> R_base;
+    R_base << noise * noise;
     
-    // Kalman gain
-    Eigen::Matrix<double, ERROR_STATE_DIM, 1> K = T / S;
+    // Set up measurement vectors for robust update
+    Eigen::Matrix<double, 1, 1> z_meas, z_pred;
+    z_meas << measured;
+    z_pred << mean_anomaly;
     
-    // Update
-    double innovation = measured - mean_anomaly;
-    Eigen::Matrix<double, ERROR_STATE_DIM, 1> state_correction = K * innovation;
+    // Use robust gated update
+    auto result = RobustUpdate<ERROR_STATE_DIM, 1>::update(
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero(), // Error state (always zero for nominal)
+        P_,
+        z_meas,
+        z_pred,
+        H,
+        R_base,
+        anomaly_innovation_history_
+    );
     
-    // Apply correction
-    nominal_state_ = applyError(nominal_state_, state_correction);
-    
-    // Update covariance
-    P_ = P_ - K * K.transpose() * S;
-    enforcePositiveDefinite(P_);
+    if (result.accepted) {
+        // Apply error state update to nominal state
+        nominal_state_ = applyError(nominal_state_, result.x_updated);
+        P_ = result.P_updated;
+        
+        // Update integrity statistics
+        integrity_stats_.addNIS(result.nis, 1);
+        
+        std::cout << "Anomaly update accepted (NIS=" << result.nis 
+                 << ", adaptive_scale=" << result.adaptive_scale << ")\n";
+    } else {
+        std::cout << "Anomaly measurement rejected by chi-square gate\n";
+    }
 }
 
 void UKF::updateZUPT(const Eigen::Matrix3d& R_vel) {
