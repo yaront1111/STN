@@ -1,0 +1,95 @@
+# GRAVITY-PRIMARY NAVIGATION CONFIGURATION
+# Version 2.0 - No TRN dependencies
+
+system:
+  rate_hz: 100.0              # Main navigation rate
+  max_runtime: 3600.0         # Maximum runtime (seconds)
+  
+# Unscented Kalman Filter
+ukf:
+  alpha: 0.001                # Spread of sigma points
+  beta: 2.0                   # Prior knowledge (2 = Gaussian)
+  kappa: 0.0                  # Secondary scaling
+  
+  # Process noise
+  process_noise:
+    position: 0.01            # m²/s⁴
+    velocity: 0.1             # m²/s³
+    attitude: 0.001           # rad²/s
+    acc_bias: 1.0e-6          # (m/s²)²/s
+    gyro_bias: 1.0e-7         # (rad/s)²/s
+    clock_offset: 1.0e-9      # s²/s
+    clock_drift: 1.0e-12      # (s/s)²/s
+
+# Gravity Model Configuration
+gravity:
+  model: EGM2020              # Use latest model
+  max_degree: 2190            # Full resolution
+  
+  # Temporal corrections
+  earth_tides: true           # Apply solid Earth tides
+  ocean_tides: true           # Apply ocean loading
+  atmospheric: true           # Atmospheric pressure effects
+  
+  # Relativistic corrections
+  relativistic: true          # Apply GR corrections
+  
+  # Gradient measurement
+  gradient:
+    enabled: true
+    rate_hz: 10.0            # Gradiometer rate
+    noise_eotvos: 0.1        # Measurement noise (Eötvös)
+    
+  # Anomaly measurement (from accelerometer)
+  anomaly:
+    enabled: true
+    rate_hz: 50.0            # Update rate
+    noise_mgal: 1.0          # Measurement noise (mGal)
+    min_threshold: 0.1       # Minimum anomaly to process
+
+# Hardware Configuration
+hardware:
+  imu:
+    type: VectorNav-VN200
+    port: /dev/ttyUSB0
+    baudrate: 921600
+    rate_hz: 200.0
+    
+  gradiometer:
+    enabled: false           # Not yet available
+    type: Lockheed-Quantum
+    port: /dev/ttyUSB1
+    
+  csac:
+    enabled: false           # Optional
+    type: Microsemi-SA45
+    port: /dev/ttyUSB2
+
+# Output Configuration
+output:
+  path: data/gravity_nav.csv
+  rate_hz: 10.0
+  format: csv
+  
+  # What to output
+  fields:
+    - time
+    - position_ecef
+    - velocity_ecef
+    - attitude_quaternion
+    - clock_states
+    - gradient_tensor
+    - anomaly_value
+    - covariance_diagonal
+
+# Performance Monitoring
+monitoring:
+  log_level: INFO
+  metrics:
+    - position_error
+    - velocity_error
+    - clock_drift
+    - computation_time
+    - memory_usage
+    
+# NO TRN CONFIGURATION - COMPLETELY REMOVED
