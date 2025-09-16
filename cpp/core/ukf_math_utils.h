@@ -1,5 +1,6 @@
 #pragma once
 #include <Eigen/Dense>
+#include "types.h"
 
 /**
  * @brief Mathematical utilities for UKF operations
@@ -47,6 +48,12 @@ public:
     // Coordinate transformations
     static Eigen::Vector3d ecefToLla(const Eigen::Vector3d& ecef);
     static Eigen::Vector3d llaToEcef(const Eigen::Vector3d& lla);
+    
+    // Error-state operations (for UKF sigma points)
+    static State applyErrorToState(const State& nominal_state, 
+                                  const Eigen::Matrix<double, 15, 1>& error_vector);
+    static Eigen::Matrix<double, 15, 1> computeErrorVector(const State& state1, 
+                                                           const State& state2);
     
 private:
     // Constants

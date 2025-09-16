@@ -1,9 +1,16 @@
 #pragma once
 #include "types.h"
 #include "integrity.hpp"
+#include "ukf_config.h"
+#include "ukf_math_utils.h"
 #include <Eigen/Dense>
 #include <vector>
 #include <iostream>
+#include <memory>
+
+// Forward declarations for modular architecture
+class UKFSigmaPoints;
+class UKFMeasurements;
 
 /**
  * Stable UKF Implementation using Error-State Formulation
@@ -14,6 +21,10 @@
  * This avoids quaternion normalization issues in covariance
  */
 class UKF {
+    // Friend classes for modular architecture
+    friend class UKFSigmaPoints;
+    friend class UKFMeasurements;
+    
 public:
     // State dimensions
     static constexpr int FULL_STATE_DIM = 16;  // p(3) + v(3) + q(4) + ba(3) + bg(3)
@@ -27,25 +38,11 @@ public:
     static constexpr int BA_IDX = 9;
     static constexpr int BG_IDX = 12;
     
-    struct Config {
-        double alpha;  // Spread of sigma points
-        double beta;    // Prior knowledge (2 = Gaussian)
-        double kappa;   // Secondary scaling
-        
-        // Process noise (standard deviations)
-        double sigma_pos;      // m
-        double sigma_vel;      // m/s
-        double sigma_att;     // rad
-        double sigma_ba;      // m/s²
-        double sigma_bg;      // rad/s
-        
-        Config() : 
-            alpha(1e-3), beta(2.0), kappa(0.0),
-            sigma_pos(0.1), sigma_vel(1.0), sigma_att(0.01),
-            sigma_ba(1e-4), sigma_bg(1e-5) {}
-    };
+    // Note: SigmaPoint struct is defined in ukf_sigma_points.h
     
-    UKF(const Config& cfg = Config());
+    // Use centralized configuration
+    UKF(const UKFConfig& cfg = UKFConfig());
+    ~UKF();
     
     /**
      * Initialize filter with state and covariance
@@ -63,6 +60,12 @@ public:
     void updateGradient(const Eigen::Matrix3d& measured, const Eigen::Matrix3d& R);
     
     /**
+     * Update with gravity gradient invariants (2D eigenvalue measurement)
+     * More robust than full 9D tensor - reduces attitude coupling and improves acceptance
+     */
+    void updateGradientInvariants(const Eigen::Matrix3d& measured_tensor, const Eigen::Matrix2d& R_invariants);
+    
+    /**
      * Update with gravity anomaly
      */
     void updateAnomaly(double measured, double noise);
@@ -73,6 +76,12 @@ public:
     void updateMagnetometer(const Eigen::Vector3d& mag_body, 
                            const Eigen::Vector3d& mag_ref_ECEF,
                            const Eigen::Matrix3d& R_mag);
+    
+    /**
+     * Update with Doppler velocity measurement (critical for velocity observability!)
+     */
+    void updateDopplerVelocity(const Eigen::Vector3d& measured_velocity_body, 
+                              const Eigen::Matrix3d& R_doppler);
     
     /**
      * Zero Velocity Update - constrains velocity when stationary
@@ -96,8 +105,26 @@ public:
     void updateGravityMapMatch(const Eigen::Vector3d& matched_position_ECEF,
                                const Eigen::Matrix3d& R_position);
     
+    /**
+     * Kinematic pseudo-measurements for velocity constraints
+     */
+    void updateZeroVerticalSpeed(double R_vertical);
+    void updateZeroSideslip(double R_sideslip);
+    void updateVirtualDoppler(const Eigen::Vector3d& velocity_meas, const Eigen::Matrix3d& R_virtual);
+    void updateScalarPseudo(double z_meas, double z_pred, double S_pred, double R_scalar);
+    
     State getState() const { return nominal_state_; }
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCovariance() const { return P_; }
+    
+    // Getters for modular components
+    const Eigen::VectorXd& getWeightsMean() const { return weights_mean_; }
+    const Eigen::VectorXd& getWeightsCov() const { return weights_cov_; }
+    double getLambda() const { return lambda_; }
+    UKFSigmaPoints& getSigmaManager() { return *sigma_points_manager_; }
+    
+    // Update state and covariance (for measurements)
+    void setState(const State& state) { nominal_state_ = state; }
+    void setCovariance(const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P) { P_ = P; }
     
     // Filter integrity monitoring
     double getNEES() const { return integrity_stats_.nees; }
@@ -115,18 +142,15 @@ private:
     // Error-state covariance (15x15)
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_;
     
-    // Sigma points in error-state space
-    struct SigmaPoint {
-        State state;  // Full state
-        Eigen::Matrix<double, ERROR_STATE_DIM, 1> error;  // Error state
-    };
-    std::vector<SigmaPoint> sigma_points_;
-    
-    // UKF parameters
-    Config cfg_;
+    // UKF configuration and parameters
+    UKFConfig cfg_;
     double lambda_;
     Eigen::VectorXd weights_mean_;
     Eigen::VectorXd weights_cov_;
+    
+    // Modular components (using unique_ptr)
+    std::unique_ptr<UKFSigmaPoints> sigma_points_manager_;
+    std::unique_ptr<UKFMeasurements> measurements_manager_;
     
     // Filter integrity monitoring using IntegrityMonitor
     IntegrityMonitor::Stats integrity_stats_;
@@ -171,7 +195,19 @@ private:
     void enforcePositiveDefinite(Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P);
     
     /**
+     * Add process noise to covariance matrix
+     */
+    void addProcessNoise(double dt);
+    
+    /**
      * Compute UKF weights
      */
     void computeWeights();
+    
+    /**
+     * Utility functions for gradient invariants
+     */
+    Eigen::Vector2d computeTensorInvariants(const Eigen::Matrix3d& tensor);
+    void performRobustUpdate(const Eigen::VectorXd& innovation, const Eigen::MatrixXd& S, 
+                           const Eigen::MatrixXd& T_cross, const Eigen::MatrixXd& R);
 };

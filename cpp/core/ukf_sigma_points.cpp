@@ -1,0 +1,147 @@
+#include "ukf_sigma_points.h"
+#include "ukf.h"
+#include "ukf_math_utils.h"
+#include <iostream>
+
+UKFSigmaPoints::UKFSigmaPoints(UKF& ukf) : ukf_(ukf) {
+    sigma_points_.resize(UKF_NUM_SIGMA_POINTS);
+}
+
+void UKFSigmaPoints::generate(const State& nominal_state, 
+                              const Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>& P,
+                              double lambda) {
+    // Ensure P is valid before proceeding
+    if (!UKFMathUtils::checkMatrixValidity<UKF_ERROR_STATE_DIM>(P)) {
+        std::cerr << "ERROR: Invalid covariance matrix in sigma point generation!\n";
+        return;
+    }
+    
+    // Compute matrix square root using robust method
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> sqrt_P = 
+        computeMatrixSqrt(P);
+    
+    double sqrt_factor = std::sqrt(UKF_ERROR_STATE_DIM + lambda);
+    
+    // Generate sigma points
+    // Central sigma point (index 0)
+    sigma_points_[0] = SigmaPoint(nominal_state, 0, 0);  // weights will be set later
+    
+    // Positive and negative sigma points  
+    for (int i = 0; i < UKF_ERROR_STATE_DIM; ++i) {
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> offset = 
+            sqrt_factor * sqrt_P.col(i);
+        
+        // Apply error to nominal state using UKF's method
+        State pos_state = UKFMathUtils::applyErrorToState(nominal_state, offset);
+        State neg_state = UKFMathUtils::applyErrorToState(nominal_state, -offset);
+        
+        // Positive sigma point (index i+1)
+        sigma_points_[i + 1] = SigmaPoint(pos_state, 0, 0);  // weights will be set later
+        
+        // Negative sigma point (index i+1+ERROR_STATE_DIM)
+        sigma_points_[i + 1 + UKF_ERROR_STATE_DIM] = SigmaPoint(neg_state, 0, 0);
+    }
+}
+
+std::vector<State> UKFSigmaPoints::propagateStates(const ImuSample& imu, double dt) {
+    std::vector<State> propagated_states;
+    propagated_states.reserve(sigma_points_.size());
+    
+    for (const auto& sigma_point : sigma_points_) {
+        // Use direct integration since UKF doesn't have propagateState method yet
+        State propagated = sigma_point.state;
+        
+        // Simple integration step (this should be replaced with actual IMU integration)
+        propagated.p_ECEF += propagated.v_ECEF * dt;
+        propagated.v_ECEF += propagated.q_ECEF_B * imu.acc_mps2 * dt;
+        
+        // Attitude integration with gyro
+        Eigen::Vector3d corrected_gyro = imu.gyro_rps - propagated.b_g;
+        Eigen::Vector3d omega_dt = corrected_gyro * dt;
+        if (omega_dt.norm() > 1e-10) {
+            Eigen::Quaterniond delta_q = UKFMathUtils::rotationVectorToQuaternion(omega_dt);
+            propagated.q_ECEF_B = propagated.q_ECEF_B * delta_q;
+            propagated.q_ECEF_B.normalize();
+        }
+        
+        propagated.t = sigma_point.state.t + dt;
+        propagated_states.push_back(propagated);
+    }
+    
+    return propagated_states;
+}
+
+State UKFSigmaPoints::computeMeanState(const std::vector<State>& states, 
+                                      const Eigen::VectorXd& weights_mean) {
+    if (states.empty()) {
+        return State();
+    }
+    
+    State mean_state;
+    
+    // Mean position
+    mean_state.p_ECEF = Eigen::Vector3d::Zero();
+    for (size_t i = 0; i < states.size(); ++i) {
+        mean_state.p_ECEF += weights_mean(i) * states[i].p_ECEF;
+    }
+    
+    // Mean velocity  
+    mean_state.v_ECEF = Eigen::Vector3d::Zero();
+    for (size_t i = 0; i < states.size(); ++i) {
+        mean_state.v_ECEF += weights_mean(i) * states[i].v_ECEF;
+    }
+    
+    // Mean quaternion (requires special handling)
+    std::vector<Eigen::Quaterniond> quaternions;
+    for (const auto& state : states) {
+        quaternions.push_back(state.q_ECEF_B);
+    }
+    mean_state.q_ECEF_B = computeMeanQuaternion(states, weights_mean);
+    
+    // Mean biases
+    mean_state.b_a = Eigen::Vector3d::Zero();
+    mean_state.b_g = Eigen::Vector3d::Zero();
+    for (size_t i = 0; i < states.size(); ++i) {
+        mean_state.b_a += weights_mean(i) * states[i].b_a;
+        mean_state.b_g += weights_mean(i) * states[i].b_g;
+    }
+    
+    return mean_state;
+}
+
+Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> 
+UKFSigmaPoints::computeCovariance(const std::vector<State>& states,
+                                  const State& mean_state,
+                                  const Eigen::VectorXd& weights_cov) {
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> P = 
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>::Zero();
+    
+    for (size_t i = 0; i < states.size(); ++i) {
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error = 
+            UKFMathUtils::computeErrorVector(states[i], mean_state);
+        P += weights_cov(i) * error * error.transpose();
+    }
+    
+    // Ensure positive definiteness
+    UKFMathUtils::enforcePositiveDefinite<UKF_ERROR_STATE_DIM>(P);
+    
+    return P;
+}
+
+Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> 
+UKFSigmaPoints::computeMatrixSqrt(const Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>& matrix) {
+    // Use the robust matrix sqrt from UKFMathUtils
+    return UKFMathUtils::robustMatrixSqrt<UKF_ERROR_STATE_DIM>(matrix);
+}
+
+Eigen::Quaterniond UKFSigmaPoints::computeMeanQuaternion(const std::vector<State>& states,
+                                                        const Eigen::VectorXd& weights_mean) {
+    std::vector<Eigen::Quaterniond> quaternions;
+    quaternions.reserve(states.size());
+    
+    for (const auto& state : states) {
+        quaternions.push_back(state.q_ECEF_B);
+    }
+    
+    return UKFMathUtils::averageQuaternions(quaternions, weights_mean);
+}

@@ -1,7 +1,10 @@
 #pragma once
-#include "ukf.h"
+#include "types.h"
 #include <Eigen/Dense>
 #include <functional>
+
+// Forward declaration
+class UKF;
 
 /**
  * @brief UKF Measurement Update Handler
@@ -45,7 +48,7 @@ private:
     
     // Robust covariance update using Joseph form
     void updateCovarianceJoseph(
-        Eigen::Matrix<double, UKF::ERROR_STATE_DIM, UKF::ERROR_STATE_DIM>& P,
+        Eigen::Matrix<double, 15, 15>& P,
         const Eigen::MatrixXd& K,
         const Eigen::MatrixXd& H,
         const Eigen::MatrixXd& R
