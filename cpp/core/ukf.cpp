@@ -58,20 +58,32 @@ void UKF::init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERR
 }
 
 void UKF::predict(const ImuSample& imu, double dt) {
+    // First ensure current covariance is valid
+    if (!UKFMathUtils::checkMatrixValidity<ERROR_STATE_DIM>(P_)) {
+        std::cerr << "WARNING: Invalid covariance before predict, fixing...\n";
+        UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_, cfg_.numerical.min_eigenvalue);
+    }
+
     // Generate sigma points using modular manager
     sigma_points_manager_->generate(nominal_state_, P_, lambda_);
-    
+
     // Propagate sigma points through motion model
     auto propagated_states = sigma_points_manager_->propagateStates(imu, dt);
-    
+
     // Compute predicted mean state
     nominal_state_ = sigma_points_manager_->computeMeanState(propagated_states, weights_mean_);
-    
-    // Compute predicted covariance  
+
+    // Compute predicted covariance
     P_ = sigma_points_manager_->computeCovariance(propagated_states, nominal_state_, weights_cov_);
-    
+
     // Add process noise
     addProcessNoise(dt);
+
+    // Final check and fix
+    if (!UKFMathUtils::checkMatrixValidity<ERROR_STATE_DIM>(P_)) {
+        std::cerr << "WARNING: Invalid covariance after predict, fixing...\n";
+        UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_, cfg_.numerical.min_eigenvalue);
+    }
 }
 
 void UKF::addProcessNoise(double dt) {

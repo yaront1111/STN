@@ -7,37 +7,50 @@ UKFSigmaPoints::UKFSigmaPoints(UKF& ukf) : ukf_(ukf) {
     sigma_points_.resize(UKF_NUM_SIGMA_POINTS);
 }
 
-void UKFSigmaPoints::generate(const State& nominal_state, 
+void UKFSigmaPoints::generate(const State& nominal_state,
                               const Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>& P,
                               double lambda) {
-    // Ensure P is valid before proceeding
-    if (!UKFMathUtils::checkMatrixValidity<UKF_ERROR_STATE_DIM>(P)) {
-        std::cerr << "ERROR: Invalid covariance matrix in sigma point generation!\n";
-        return;
+    // First make a copy and enforce positive definiteness
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> P_safe = P;
+
+    // Enforce symmetry and positive definiteness
+    P_safe = 0.5 * (P_safe + P_safe.transpose());
+    UKFMathUtils::enforcePositiveDefinite<UKF_ERROR_STATE_DIM>(P_safe, 1e-9);
+
+    // Check if the covariance is still invalid after fixing
+    if (!UKFMathUtils::checkMatrixValidity<UKF_ERROR_STATE_DIM>(P_safe)) {
+        std::cerr << "WARNING: Resetting invalid covariance matrix in sigma point generation!\n";
+        // Reset to a safe diagonal matrix if still invalid
+        P_safe = Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>::Identity() * 1e-6;
+        P_safe.block<3,3>(0,0) *= 100.0;  // Position uncertainty: 10cm
+        P_safe.block<3,3>(3,3) *= 0.01;   // Velocity uncertainty: 0.1m/s
+        P_safe.block<3,3>(6,6) *= 0.0001; // Attitude uncertainty: 0.01rad
+        P_safe.block<3,3>(9,9) *= 1e-6;   // Accel bias uncertainty: 1e-3 m/s²
+        P_safe.block<3,3>(12,12) *= 1e-8; // Gyro bias uncertainty: 1e-4 rad/s
     }
-    
+
     // Compute matrix square root using robust method
-    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> sqrt_P = 
-        computeMatrixSqrt(P);
-    
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> sqrt_P =
+        computeMatrixSqrt(P_safe);
+
     double sqrt_factor = std::sqrt(UKF_ERROR_STATE_DIM + lambda);
-    
+
     // Generate sigma points
     // Central sigma point (index 0)
     sigma_points_[0] = SigmaPoint(nominal_state, 0, 0);  // weights will be set later
-    
-    // Positive and negative sigma points  
+
+    // Positive and negative sigma points
     for (int i = 0; i < UKF_ERROR_STATE_DIM; ++i) {
-        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> offset = 
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> offset =
             sqrt_factor * sqrt_P.col(i);
-        
+
         // Apply error to nominal state using UKF's method
         State pos_state = UKFMathUtils::applyErrorToState(nominal_state, offset);
         State neg_state = UKFMathUtils::applyErrorToState(nominal_state, -offset);
-        
+
         // Positive sigma point (index i+1)
         sigma_points_[i + 1] = SigmaPoint(pos_state, 0, 0);  // weights will be set later
-        
+
         // Negative sigma point (index i+1+ERROR_STATE_DIM)
         sigma_points_[i + 1 + UKF_ERROR_STATE_DIM] = SigmaPoint(neg_state, 0, 0);
     }

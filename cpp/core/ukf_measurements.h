@@ -25,6 +25,15 @@ public:
         std::function<Eigen::Matrix<double, MeasDim, 1>(const State&)> measurement_model,
         bool use_joseph_form = false
     );
+
+    // Measurement update without chi-square gating (for trusted measurements like map matching)
+    template<int MeasDim>
+    void updateMeasurementNoGate(
+        const Eigen::Matrix<double, MeasDim, 1>& measurement,
+        const Eigen::Matrix<double, MeasDim, MeasDim>& noise_cov,
+        std::function<Eigen::Matrix<double, MeasDim, 1>(const State&)> measurement_model,
+        bool use_joseph_form = false
+    );
     
     // Specific measurement updates
     void updateGravityGradient(const Eigen::Matrix3d& measured, const Eigen::Matrix3d& R);
@@ -41,7 +50,17 @@ public:
 
 private:
     UKF& ukf_;
-    
+
+    // Internal measurement update with gate control
+    template<int MeasDim>
+    void updateMeasurementInternal(
+        const Eigen::Matrix<double, MeasDim, 1>& measurement,
+        const Eigen::Matrix<double, MeasDim, MeasDim>& noise_cov,
+        std::function<Eigen::Matrix<double, MeasDim, 1>(const State&)> measurement_model,
+        bool use_joseph_form,
+        bool apply_gate
+    );
+
     // Utility functions
     Eigen::VectorXd flattenMatrix(const Eigen::Matrix3d& matrix) const;
     Eigen::Matrix3d unflattenVector(const Eigen::VectorXd& vector) const;

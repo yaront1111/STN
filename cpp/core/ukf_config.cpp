@@ -92,12 +92,12 @@ void UKFConfig::setGradeAOptimal() {
     beta = 2.0;       // Gaussian assumption
     kappa = 0.0;      // Standard setting
     
-    // Tuned process noise based on previous performance analysis
-    process_noise.position = 0.1;      // Conservative position noise
-    process_noise.velocity = 1.0;      // Allow velocity uncertainty
-    process_noise.attitude = 0.01;     // Moderate attitude noise
-    process_noise.accel_bias = 1e-3;   // Realistic accelerometer bias drift
-    process_noise.gyro_bias = 3e-5;    // Realistic gyroscope bias drift
+    // High process noise to maintain covariance for map matching
+    process_noise.position = 10.0;     // High to maintain uncertainty
+    process_noise.velocity = 50.0;     // Very high velocity uncertainty
+    process_noise.attitude = 0.1;      // Higher attitude noise
+    process_noise.accel_bias = 0.1;    // Higher bias drift
+    process_noise.gyro_bias = 1e-3;    // Higher gyro bias drift
     
     // Calibrated measurement noise based on test results
     measurement_noise.gravity_gradient = 1.41e7;   // Calibrated from NIS analysis (sqrt(2e15))

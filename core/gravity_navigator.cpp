@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
     
     // Initialize UKF
     std::cout << "\nInitializing Unscented Kalman Filter...\n";
-    UKF::Config ukf_config;
+    UKFConfig ukf_config;
     ukf_config.alpha = config.getDouble("ukf.alpha", 1e-3);
     ukf_config.beta = config.getDouble("ukf.beta", 2.0);
     ukf_config.kappa = config.getDouble("ukf.kappa", 0.0);

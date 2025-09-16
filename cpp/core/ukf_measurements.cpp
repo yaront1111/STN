@@ -9,11 +9,32 @@ UKFMeasurements::UKFMeasurements(UKF& ukf) : ukf_(ukf) {
 }
 
 template<int MeasDim>
+void UKFMeasurements::updateMeasurementNoGate(
+    const Eigen::Matrix<double, MeasDim, 1>& measurement,
+    const Eigen::Matrix<double, MeasDim, MeasDim>& noise_cov,
+    std::function<Eigen::Matrix<double, MeasDim, 1>(const State&)> measurement_model,
+    bool use_joseph_form) {
+    // Same as updateMeasurement but without chi-square gate
+    updateMeasurementInternal<MeasDim>(measurement, noise_cov, measurement_model, use_joseph_form, false);
+}
+
+template<int MeasDim>
 void UKFMeasurements::updateMeasurement(
     const Eigen::Matrix<double, MeasDim, 1>& measurement,
     const Eigen::Matrix<double, MeasDim, MeasDim>& noise_cov,
     std::function<Eigen::Matrix<double, MeasDim, 1>(const State&)> measurement_model,
     bool use_joseph_form) {
+    // With chi-square gate
+    updateMeasurementInternal<MeasDim>(measurement, noise_cov, measurement_model, use_joseph_form, true);
+}
+
+template<int MeasDim>
+void UKFMeasurements::updateMeasurementInternal(
+    const Eigen::Matrix<double, MeasDim, 1>& measurement,
+    const Eigen::Matrix<double, MeasDim, MeasDim>& noise_cov,
+    std::function<Eigen::Matrix<double, MeasDim, 1>(const State&)> measurement_model,
+    bool use_joseph_form,
+    bool apply_gate) {
     
     // Get current state and covariance from UKF
     State current_state = ukf_.getState();
@@ -55,18 +76,58 @@ void UKFMeasurements::updateMeasurement(
     // Add measurement noise
     S += noise_cov;
     
+    // DEBUG: Check for numerical issues
+    if (!S.allFinite()) {
+        std::cout << "ERROR: Innovation covariance S contains NaN/Inf values!\n";
+        std::cout << "S matrix:\n" << S << "\n";
+        return;
+    }
+    
+    // Check if S is positive definite
+    Eigen::LLT<Eigen::Matrix<double, MeasDim, MeasDim>> llt_check(S);
+    if (llt_check.info() != Eigen::Success) {
+        std::cout << "ERROR: Innovation covariance S is not positive definite!\n";
+        std::cout << "S matrix:\n" << S << "\n";
+        std::cout << "Eigenvalues: " << Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, MeasDim, MeasDim>>(S).eigenvalues().transpose() << "\n";
+        return;
+    }
+    
     // Compute innovation
     Eigen::Matrix<double, MeasDim, 1> innovation = measurement - predicted_mean;
     
+    // DEBUG: Check innovation
+    if (!innovation.allFinite()) {
+        std::cout << "ERROR: Innovation contains NaN/Inf values!\n";
+        std::cout << "Innovation: " << innovation.transpose() << "\n";
+        std::cout << "Measurement: " << measurement.transpose() << "\n";
+        std::cout << "Predicted: " << predicted_mean.transpose() << "\n";
+        return;
+    }
+    
     // Chi-square gating
     double nis = UKFMathUtils::mahalanobisDistance(innovation, S);
-    if (!UKFMathUtils::chiSquareTest(nis, MeasDim, 0.95)) {
+    if (!std::isfinite(nis)) {
+        std::cout << "ERROR: NIS calculation resulted in NaN/Inf!\n";
+        std::cout << "Innovation: " << innovation.transpose() << "\n";
+        std::cout << "S determinant: " << S.determinant() << "\n";
+        return;
+    }
+
+    if (apply_gate && !UKFMathUtils::chiSquareTest(nis, MeasDim, 0.99)) {
         std::cout << "Measurement REJECTED by chi-square gate (NIS=" << nis << ")\n";
         return;
     }
     
-    // Compute Kalman gain
-    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, MeasDim> K = T * S.inverse();
+    // Compute Kalman gain using robust solver
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, MeasDim> K;
+    Eigen::LLT<Eigen::Matrix<double, MeasDim, MeasDim>> llt_solve(S);
+    if (llt_solve.info() == Eigen::Success) {
+        K = T * llt_solve.solve(Eigen::Matrix<double, MeasDim, MeasDim>::Identity());
+    } else {
+        // Fallback to SVD
+        Eigen::JacobiSVD<Eigen::Matrix<double, MeasDim, MeasDim>> svd(S, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        K = T * svd.solve(Eigen::Matrix<double, MeasDim, MeasDim>::Identity());
+    }
     
     // Update state
     Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> state_correction = K * innovation;
@@ -111,13 +172,14 @@ void UKFMeasurements::updateGravityGradient(const Eigen::Matrix3d& measured, con
     updateMeasurement<9>(measured_vec, noise_cov, measurement_model, true);
 }
 
-void UKFMeasurements::updateGravityMapMatch(const Eigen::Vector3d& matched_position_ECEF, 
+void UKFMeasurements::updateGravityMapMatch(const Eigen::Vector3d& matched_position_ECEF,
                                            const Eigen::Matrix3d& R_position) {
     auto measurement_model = [](const State& state) -> Eigen::Vector3d {
         return state.p_ECEF;
     };
-    
-    updateMeasurement<3>(matched_position_ECEF, R_position, measurement_model, true);
+
+    // Map matching is special - we trust the correlator, so bypass chi-square gate
+    updateMeasurementNoGate<3>(matched_position_ECEF, R_position, measurement_model, true);
 }
 
 void UKFMeasurements::updateMagnetometer(const Eigen::Vector3d& mag_body, 
@@ -204,8 +266,8 @@ Eigen::Matrix3d UKFMeasurements::unflattenVector(const Eigen::VectorXd& vector) 
 }
 
 Eigen::Matrix3d UKFMeasurements::predictGravityGradient(const State& state) const {
-    // Use existing gravity gradient provider for prediction
-    GravityGradientProvider provider;
+    // CRITICAL FIX: Use shared gravity provider to avoid repeated EGM2008 loading
+    static GravityGradientProvider provider;  // Static to avoid repeated initialization
     auto result = provider.getGradient(state.p_ECEF);
     return result.T;
 }
@@ -214,7 +276,7 @@ Eigen::Matrix3d UKFMeasurements::predictGravityGradient(const State& state) cons
 template void UKFMeasurements::updateMeasurement<1>(
     const Eigen::Matrix<double, 1, 1>&, const Eigen::Matrix<double, 1, 1>&,
     std::function<Eigen::Matrix<double, 1, 1>(const State&)>, bool);
-    
+
 template void UKFMeasurements::updateMeasurement<3>(
     const Eigen::Vector3d&, const Eigen::Matrix3d&,
     std::function<Eigen::Vector3d(const State&)>, bool);
@@ -222,7 +284,29 @@ template void UKFMeasurements::updateMeasurement<3>(
 template void UKFMeasurements::updateMeasurement<2>(
     const Eigen::Matrix<double, 2, 1>&, const Eigen::Matrix<double, 2, 2>&,
     std::function<Eigen::Matrix<double, 2, 1>(const State&)>, bool);
-    
+
 template void UKFMeasurements::updateMeasurement<9>(
     const Eigen::Matrix<double, 9, 1>&, const Eigen::Matrix<double, 9, 9>&,
     std::function<Eigen::Matrix<double, 9, 1>(const State&)>, bool);
+
+// Explicit template instantiation for NoGate versions
+template void UKFMeasurements::updateMeasurementNoGate<3>(
+    const Eigen::Vector3d&, const Eigen::Matrix3d&,
+    std::function<Eigen::Vector3d(const State&)>, bool);
+
+// Explicit template instantiation for Internal versions
+template void UKFMeasurements::updateMeasurementInternal<1>(
+    const Eigen::Matrix<double, 1, 1>&, const Eigen::Matrix<double, 1, 1>&,
+    std::function<Eigen::Matrix<double, 1, 1>(const State&)>, bool, bool);
+
+template void UKFMeasurements::updateMeasurementInternal<3>(
+    const Eigen::Vector3d&, const Eigen::Matrix3d&,
+    std::function<Eigen::Vector3d(const State&)>, bool, bool);
+
+template void UKFMeasurements::updateMeasurementInternal<2>(
+    const Eigen::Matrix<double, 2, 1>&, const Eigen::Matrix<double, 2, 2>&,
+    std::function<Eigen::Matrix<double, 2, 1>(const State&)>, bool, bool);
+
+template void UKFMeasurements::updateMeasurementInternal<9>(
+    const Eigen::Matrix<double, 9, 1>&, const Eigen::Matrix<double, 9, 9>&,
+    std::function<Eigen::Matrix<double, 9, 1>(const State&)>, bool, bool);

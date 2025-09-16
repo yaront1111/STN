@@ -1,6 +1,7 @@
 #include "ukf_math_utils.h"
 #include <cmath>
 #include <algorithm>
+#include <iostream>
 
 Eigen::Quaterniond UKFMathUtils::rotationVectorToQuaternion(const Eigen::Vector3d& rot_vec) {
     double angle = rot_vec.norm();
@@ -76,17 +77,52 @@ Eigen::Quaterniond UKFMathUtils::averageQuaternions(const std::vector<Eigen::Qua
 
 double UKFMathUtils::mahalanobisDistance(const Eigen::VectorXd& innovation,
                                         const Eigen::MatrixXd& covariance) {
+    // DEBUG: Check inputs for validity
+    if (!innovation.allFinite()) {
+        std::cout << "ERROR: Innovation contains NaN/Inf in mahalanobisDistance\\n";
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    
+    if (!covariance.allFinite()) {
+        std::cout << "ERROR: Covariance contains NaN/Inf in mahalanobisDistance\\n";
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    
     // Compute Mahalanobis distance: sqrt(innovation^T * S^-1 * innovation)
     // Use robust solver instead of pseudoinverse
     Eigen::LLT<Eigen::MatrixXd> llt(covariance);
     if (llt.info() == Eigen::Success) {
         Eigen::VectorXd solved = llt.solve(innovation);
-        return std::sqrt(innovation.dot(solved));
+        double distance_squared = innovation.dot(solved);
+        
+        if (!std::isfinite(distance_squared) || distance_squared < 0) {
+            std::cout << "ERROR: Invalid distance_squared=" << distance_squared << " in mahalanobisDistance\\n";
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        
+        return std::sqrt(distance_squared);
     } else {
-        // Fallback: use SVD
+        // Fallback: use SVD with regularization
+        std::cout << "WARNING: LLT failed, using SVD fallback in mahalanobisDistance\\n";
         Eigen::JacobiSVD<Eigen::MatrixXd> svd(covariance, Eigen::ComputeFullU | Eigen::ComputeFullV);
-        Eigen::VectorXd solved = svd.solve(innovation);
-        return std::sqrt(innovation.dot(solved));
+        
+        // Regularize small singular values
+        Eigen::VectorXd singular_values = svd.singularValues();
+        double min_sv = 1e-12;
+        for (int i = 0; i < singular_values.size(); ++i) {
+            if (singular_values(i) < min_sv) singular_values(i) = min_sv;
+        }
+        
+        // Solve with regularized singular values
+        Eigen::VectorXd solved = svd.matrixV() * (singular_values.cwiseInverse().asDiagonal() * (svd.matrixU().transpose() * innovation));
+        double distance_squared = innovation.dot(solved);
+        
+        if (!std::isfinite(distance_squared) || distance_squared < 0) {
+            std::cout << "ERROR: Invalid distance_squared=" << distance_squared << " in SVD fallback\\n";
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        
+        return std::sqrt(distance_squared);
     }
 }
 
@@ -146,41 +182,122 @@ template<>
 void UKFMathUtils::enforcePositiveDefinite<15>(Eigen::Matrix<double, 15, 15>& matrix, double min_eigenvalue) {
     // Step 1: Enforce symmetry
     matrix = 0.5 * (matrix + matrix.transpose());
-    
+
     // Step 2: Eigenvalue decomposition
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 15, 15>> es(matrix);
-    
-    if (es.eigenvalues().minCoeff() < min_eigenvalue) {
-        Eigen::Matrix<double, 15, 1> eigenvalues = es.eigenvalues().array().max(min_eigenvalue).matrix();
+
+    if (es.info() != Eigen::Success) {
+        std::cerr << "WARNING: Eigenvalue decomposition failed, resetting to diagonal matrix!\n";
+        // Reset to safe diagonal matrix
+        matrix = Eigen::Matrix<double, 15, 15>::Identity() * min_eigenvalue;
+        matrix.block<3,3>(0,0) *= 10000.0;  // Position: ~10cm
+        matrix.block<3,3>(3,3) *= 100.0;    // Velocity: ~0.1m/s
+        matrix.block<3,3>(6,6) *= 0.01;     // Attitude: ~0.01rad
+        matrix.block<3,3>(9,9) *= 0.0001;   // Accel bias
+        matrix.block<3,3>(12,12) *= 0.00001; // Gyro bias
+        return;
+    }
+
+    // Check condition number
+    double max_eigenvalue = es.eigenvalues().maxCoeff();
+    double min_eig = es.eigenvalues().minCoeff();
+
+    if (max_eigenvalue > 1e10 || min_eig < min_eigenvalue || !std::isfinite(max_eigenvalue)) {
+        // Regularize eigenvalues
+        Eigen::Matrix<double, 15, 1> eigenvalues = es.eigenvalues();
+
+        // Clamp eigenvalues to reasonable range
+        for (int i = 0; i < 15; ++i) {
+            if (!std::isfinite(eigenvalues(i)) || eigenvalues(i) < min_eigenvalue) {
+                eigenvalues(i) = min_eigenvalue;
+            } else if (eigenvalues(i) > 1e10) {
+                eigenvalues(i) = 1e10;
+            }
+        }
+
+        // Reconstruct matrix with regularized eigenvalues
         matrix = es.eigenvectors() * eigenvalues.asDiagonal() * es.eigenvectors().transpose();
-        
+
         // Enforce symmetry again
         matrix = 0.5 * (matrix + matrix.transpose());
+
+        // Add small regularization to diagonal for numerical stability
+        matrix += Eigen::Matrix<double, 15, 15>::Identity() * (min_eigenvalue * 1e-3);
     }
 }
 
 template<>
 bool UKFMathUtils::checkMatrixValidity<15>(const Eigen::Matrix<double, 15, 15>& matrix) {
     // Check for NaN or Inf
-    if (!matrix.allFinite()) return false;
-    
+    if (!matrix.allFinite()) {
+        std::cerr << "WARNING: Matrix contains NaN or Inf values!\n";
+        return false;
+    }
+
+    // Check symmetry
+    double symmetry_error = (matrix - matrix.transpose()).norm();
+    if (symmetry_error > 1e-6) {
+        std::cerr << "WARNING: Matrix is not symmetric (error=" << symmetry_error << ")\n";
+        return false;
+    }
+
+    // Use eigenvalue decomposition for more robust check
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 15, 15>> es(matrix);
+
+    if (es.info() != Eigen::Success) {
+        std::cerr << "WARNING: Eigenvalue decomposition failed in validity check!\n";
+        return false;
+    }
+
+    double min_eigenvalue = es.eigenvalues().minCoeff();
+    double max_eigenvalue = es.eigenvalues().maxCoeff();
+
+    // Check for negative eigenvalues (not positive definite)
+    if (min_eigenvalue < 1e-12) {
+        std::cerr << "WARNING: Matrix has negative/tiny eigenvalues (min=" << min_eigenvalue << ")\n";
+        return false;
+    }
+
     // Check condition number
-    Eigen::JacobiSVD<Eigen::Matrix<double, 15, 15>> svd(matrix);
-    double cond = svd.singularValues()(0) / svd.singularValues()(14);
-    
-    return cond < 1e12;
+    double cond = max_eigenvalue / min_eigenvalue;
+    if (cond > 1e10) {
+        std::cerr << "WARNING: Matrix is poorly conditioned (cond=" << cond << ")\n";
+        return false;
+    }
+
+    return true;
 }
 
 template<>
 Eigen::Matrix<double, 15, 15> UKFMathUtils::robustMatrixSqrt<15>(const Eigen::Matrix<double, 15, 15>& matrix) {
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 15, 15>> es(matrix);
-    
+    // First enforce symmetry
+    Eigen::Matrix<double, 15, 15> symmetric = 0.5 * (matrix + matrix.transpose());
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 15, 15>> es(symmetric);
+
     if (es.info() != Eigen::Success) {
-        return Eigen::Matrix<double, 15, 15>::Identity();
+        std::cerr << "WARNING: Eigenvalue decomposition failed in matrix sqrt, using identity!\n";
+        // Return scaled identity as fallback
+        return Eigen::Matrix<double, 15, 15>::Identity() * std::sqrt(std::abs(matrix.trace() / 15.0));
     }
-    
-    Eigen::Matrix<double, 15, 1> sqrt_eigenvalues = es.eigenvalues().array().max(1e-12).sqrt().matrix();
-    return es.eigenvectors() * sqrt_eigenvalues.asDiagonal() * es.eigenvectors().transpose();
+
+    // Robustly handle negative eigenvalues
+    Eigen::Matrix<double, 15, 1> eigenvalues = es.eigenvalues();
+    double min_eigenvalue = 1e-12;
+
+    // Check for negative eigenvalues
+    if (eigenvalues.minCoeff() < min_eigenvalue) {
+        std::cerr << "WARNING: Negative eigenvalues detected, clamping to " << min_eigenvalue << "\n";
+    }
+
+    // Clamp eigenvalues and take square root
+    Eigen::Matrix<double, 15, 1> sqrt_eigenvalues = eigenvalues.array().max(min_eigenvalue).sqrt().matrix();
+
+    // Reconstruct the matrix square root
+    Eigen::Matrix<double, 15, 15> result = es.eigenvectors() * sqrt_eigenvalues.asDiagonal() * es.eigenvectors().transpose();
+
+    // Ensure the result is symmetric
+    return 0.5 * (result + result.transpose());
 }
 
 // Error-state operations

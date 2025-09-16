@@ -1,47 +1,43 @@
 #include "types.h"
 #include <cmath>
 
+// WGS84 Constants
+static constexpr double WGS84_A = 6378137.0;           // Semi-major axis (m)
+static constexpr double WGS84_F = 1.0 / 298.257223563; // Flattening
+static constexpr double WGS84_E2 = 2.0 * WGS84_F - WGS84_F * WGS84_F; // Eccentricity squared
+
 void State::fromGeodetic(double lat_rad, double lon_rad, double alt_m) {
-    // WGS84 parameters
-    const double a = 6378137.0;  // Semi-major axis
-    const double e2 = 0.00669437999014;  // First eccentricity squared
+    // Convert geodetic coordinates to ECEF
+    double N = WGS84_A / std::sqrt(1.0 - WGS84_E2 * std::sin(lat_rad) * std::sin(lat_rad));
     
-    double sin_lat = std::sin(lat_rad);
-    double cos_lat = std::cos(lat_rad);
-    double N = a / std::sqrt(1.0 - e2 * sin_lat * sin_lat);
-    
-    p_ECEF.x() = (N + alt_m) * cos_lat * std::cos(lon_rad);
-    p_ECEF.y() = (N + alt_m) * cos_lat * std::sin(lon_rad);
-    p_ECEF.z() = (N * (1.0 - e2) + alt_m) * sin_lat;
-    
-    // Initialize other states
-    v_ECEF = Eigen::Vector3d::Zero();
-    q_ECEF_B = Eigen::Quaterniond::Identity();
-    b_a = Eigen::Vector3d::Zero();
-    b_g = Eigen::Vector3d::Zero();
-    dt = df = ddf = 0.0;
-    t = 0.0;
+    p_ECEF.x() = (N + alt_m) * std::cos(lat_rad) * std::cos(lon_rad);
+    p_ECEF.y() = (N + alt_m) * std::cos(lat_rad) * std::sin(lon_rad);
+    p_ECEF.z() = (N * (1.0 - WGS84_E2) + alt_m) * std::sin(lat_rad);
 }
 
 Eigen::Vector3d State::toGeodetic() const {
-    // ECEF to geodetic conversion (iterative method)
-    const double a = 6378137.0;
-    const double e2 = 0.00669437999014;
+    // Convert ECEF to geodetic coordinates
+    double x = p_ECEF.x();
+    double y = p_ECEF.y();
+    double z = p_ECEF.z();
     
-    double p = std::sqrt(p_ECEF.x() * p_ECEF.x() + p_ECEF.y() * p_ECEF.y());
-    double lon = std::atan2(p_ECEF.y(), p_ECEF.x());
+    double p = std::sqrt(x*x + y*y);
+    double lon = std::atan2(y, x);
     
-    // Initial guess
-    double lat = std::atan2(p_ECEF.z(), p * (1.0 - e2));
-    double alt = 0.0;
+    // Iterative solution for latitude
+    double lat = std::atan2(z, p * (1.0 - WGS84_E2));
+    double lat_prev = 0.0;
+    double N = 0.0;
     
-    // Iterate
-    for (int i = 0; i < 5; ++i) {
-        double sin_lat = std::sin(lat);
-        double N = a / std::sqrt(1.0 - e2 * sin_lat * sin_lat);
-        alt = p / std::cos(lat) - N;
-        lat = std::atan2(p_ECEF.z(), p * (1.0 - e2 * N / (N + alt)));
+    for (int i = 0; i < 10; ++i) {
+        lat_prev = lat;
+        N = WGS84_A / std::sqrt(1.0 - WGS84_E2 * std::sin(lat) * std::sin(lat));
+        lat = std::atan2(z + WGS84_E2 * N * std::sin(lat), p);
+        
+        if (std::abs(lat - lat_prev) < 1e-12) break;
     }
+    
+    double alt = p / std::cos(lat) - N;
     
     return Eigen::Vector3d(lat, lon, alt);
 }
