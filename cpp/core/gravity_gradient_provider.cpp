@@ -6,26 +6,26 @@
 #include <cassert>
 
 bool GravityGradientProvider::loadEGM2020(const std::string& data_path) {
-    // Try to load real data first
-    std::string real_data_path = "egm2008/egm2008_n360.dat";
-    std::ifstream file(real_data_path, std::ios::binary);
-    
+    // Use provided path directly
+    std::ifstream file(data_path, std::ios::binary);
+
     if (!file.is_open()) {
-        // Try the provided path as fallback
-        file.open(data_path, std::ios::binary);
+        // Try alternate hardcoded path as fallback
+        std::string alt_path = "egm2008/egm2008_n360.dat";
+        file.open(alt_path, std::ios::binary);
+
+        if (!file.is_open()) {
+            std::cerr << "FATAL ERROR: Real EGM2008 data REQUIRED - NO SYNTHETIC FALLBACK!\n";
+            std::cerr << "Tried to load from:\n";
+            std::cerr << "  - " << data_path << "\n";
+            std::cerr << "  - " << alt_path << "\n";
+            std::cerr << "Please download real EGM2008 data and place at expected location.\n";
+            return false;
+        }
     }
-    
-    if (!file.is_open()) {
-        std::cerr << "FATAL ERROR: Real EGM2008 data REQUIRED - NO SYNTHETIC FALLBACK!\n";
-        std::cerr << "Tried to load from:\n";
-        std::cerr << "  - " << real_data_path << "\n";
-        std::cerr << "  - " << data_path << "\n";
-        std::cerr << "Please download real EGM2008 data and place at expected location.\n";
-        return false;
-    }
-    
+
     // Read actual EGM data
-    std::cout << "Loading real EGM2008 data from: " << real_data_path << "\n";
+    std::cout << "Loading real EGM2008 data from: " << data_path << "\n";
     coeffs_ = std::make_unique<SHCoefficients>();
     file.read(reinterpret_cast<char*>(&coeffs_->max_degree), sizeof(int));
     
