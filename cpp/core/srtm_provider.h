@@ -55,10 +55,7 @@ private:
      */
     std::string getTileFilename(int lat_deg, int lon_deg) const;
 
-    /**
-     * Generate synthetic terrain as fallback when real data unavailable
-     */
-    double generateSyntheticTerrain(double lat_rad, double lon_rad) const;
+    // NO SYNTHETIC TERRAIN - REAL DATA ONLY
 
     /**
      * Simple ECEF to geodetic conversion
@@ -74,7 +71,7 @@ private:
                                const std::vector<int16_t>& tile_data) const;
 
     bool data_loaded_;
-    bool use_synthetic_;  // Fallback to synthetic if real data unavailable
+    // NO SYNTHETIC DATA - PRODUCTION ONLY
     std::string data_directory_;
 
     // SRTM3 has 1201x1201 points per 1-degree tile (3 arc-second resolution)

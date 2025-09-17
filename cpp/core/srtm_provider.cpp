@@ -8,7 +8,7 @@
 
 const int SRTMProvider::SRTM3_SIZE;
 
-SRTMProvider::SRTMProvider() : data_loaded_(false), use_synthetic_(false) {
+SRTMProvider::SRTMProvider() : data_loaded_(false) {
 }
 
 SRTMProvider::~SRTMProvider() {
@@ -34,14 +34,13 @@ bool SRTMProvider::loadData(const std::string& srtm_directory) {
 
     if (any_loaded) {
         data_loaded_ = true;
-        use_synthetic_ = false;
         std::cout << "✓ SRTM terrain data loaded successfully\n";
     } else {
-        // Fallback to synthetic terrain
-        data_loaded_ = true;
-        use_synthetic_ = true;
-        std::cout << "WARNING: No SRTM tiles found, using synthetic terrain\n";
-        std::cout << "  (Download SRTM .hgt files to: " << srtm_directory << ")\n";
+        // NO SYNTHETIC FALLBACK - REAL DATA REQUIRED
+        data_loaded_ = false;
+        std::cerr << "ERROR: No SRTM tiles found - REAL DATA REQUIRED!\n";
+        std::cerr << "  (Download SRTM .hgt files to: " << srtm_directory << ")\n";
+        return false;
     }
 
     return true;
@@ -123,12 +122,12 @@ double SRTMProvider::getElevation(double lat_rad, double lon_rad) const {
     // Check if we have this tile
     auto tile_it = elevation_tiles_.find(std::make_pair(tile_lat, tile_lon));
     if (tile_it == elevation_tiles_.end()) {
-        // No real data - use synthetic
-        if (use_synthetic_ || !data_loaded_) {
-            return generateSyntheticTerrain(lat_rad, lon_rad);
+        // No real data - return void value
+        if (!data_loaded_) {
+            return -9999;  // Standard SRTM void value
         }
-        // No data for this region
-        return 0.0;
+        // No data for this specific tile
+        return -9999;
     }
 
     const auto& tile_data = tile_it->second;
@@ -171,31 +170,7 @@ double SRTMProvider::interpolateElevation(int lat_idx, int lon_idx,
     return h;
 }
 
-double SRTMProvider::generateSyntheticTerrain(double lat_rad, double lon_rad) const {
-    // Fallback synthetic terrain for areas without SRTM data
-    double lat_deg = lat_rad * 180.0 / M_PI;
-    double lon_deg = lon_rad * 180.0 / M_PI;
-
-    // Base elevation
-    double base_elevation = 500.0;
-
-    // Large-scale mountains
-    double mountains = 800.0 * std::sin(lat_deg * 0.1) * std::cos(lon_deg * 0.1);
-
-    // Medium-scale hills
-    double hills = 200.0 * std::sin(lat_deg * 0.5 + 1.0) * std::cos(lon_deg * 0.5 + 2.0);
-
-    // Small-scale variation
-    double variation = 50.0 * std::sin(lat_deg * 2.0 + 3.0) * std::cos(lon_deg * 2.0 + 4.0);
-
-    // Alpine ridge for Switzerland region
-    if (lat_deg > 45 && lat_deg < 48 && lon_deg > 6 && lon_deg < 10) {
-        double alpine = 1500.0 * std::exp(-std::pow((lat_deg - 46.5), 2) / 2.0);
-        return base_elevation + mountains + hills + variation + alpine;
-    }
-
-    return base_elevation + mountains + hills + variation;
-}
+// REMOVED: generateSyntheticTerrain() - NO SYNTHETIC DATA IN PRODUCTION
 
 Eigen::Vector3d SRTMProvider::ecefToLla(const Eigen::Vector3d& ecef) const {
     double lat, lon, alt;
@@ -232,7 +207,8 @@ void SRTMProvider::ecefToGeodetic(const Eigen::Vector3d& ecef,
 }
 
 bool SRTMProvider::hasDataForRegion(double lat_rad, double lon_rad) const {
-    if (use_synthetic_) return true;  // Always have synthetic data
+    // Only return true if we have real data
+    if (!data_loaded_) return false;
 
     double lat_deg = lat_rad * 180.0 / M_PI;
     double lon_deg = lon_rad * 180.0 / M_PI;

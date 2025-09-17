@@ -108,10 +108,7 @@ public:
     /**
      * Kinematic pseudo-measurements for velocity constraints
      */
-    void updateZeroVerticalSpeed(double R_vertical);
-    void updateZeroSideslip(double R_sideslip);
-    void updateVirtualDoppler(const Eigen::Vector3d& velocity_meas, const Eigen::Matrix3d& R_virtual);
-    void updateScalarPseudo(double z_meas, double z_pred, double S_pred, double R_scalar);
+    // Pseudo-measurements removed - not used in production
     
     State getState() const { return nominal_state_; }
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCovariance() const { return P_; }

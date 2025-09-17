@@ -245,65 +245,7 @@ void UKF::updateTerrainAltitude(double radar_alt, double terrain_height, double 
     measurements_manager_->updateMeasurement<1>(measurement, R, altitude_model);
 }
 
-void UKF::updateZeroVerticalSpeed(double R_vertical) {
-    // Constrain vertical velocity component
-    Eigen::Matrix<double, 1, 1> zero_measurement;
-    zero_measurement << 0.0;
-    
-    Eigen::Matrix<double, 1, 1> R;
-    R << R_vertical * R_vertical;
-    
-    auto vertical_model = [](const State& state) -> Eigen::Matrix<double, 1, 1> {
-        Eigen::Vector3d lla = UKFMathUtils::ecefToLla(state.p_ECEF);
-        // This is simplified - should use proper ECEF to NED transformation
-        Eigen::Matrix<double, 1, 1> result;
-        result << state.v_ECEF.z();  // Approximate vertical velocity
-        return result;
-    };
-    
-    measurements_manager_->updateMeasurement<1>(zero_measurement, R, vertical_model);
-}
+// REMOVED: Pseudo-measurements (updateZeroVerticalSpeed, updateZeroSideslip, updateVirtualDoppler)
+// These were not used in production and have been removed to clean up the codebase
 
-void UKF::updateZeroSideslip(double R_sideslip) {
-    // Constrain sideslip velocity (lateral velocity in body frame)
-    Eigen::Matrix<double, 1, 1> zero_measurement;
-    zero_measurement << 0.0;
-    
-    Eigen::Matrix<double, 1, 1> R;
-    R << R_sideslip * R_sideslip;
-    
-    auto sideslip_model = [](const State& state) -> Eigen::Matrix<double, 1, 1> {
-        Eigen::Vector3d v_body = state.q_ECEF_B.inverse() * state.v_ECEF;
-        Eigen::Matrix<double, 1, 1> result;
-        result << v_body.y();  // Lateral velocity component
-        return result;
-    };
-    
-    measurements_manager_->updateMeasurement<1>(zero_measurement, R, sideslip_model);
-}
-
-void UKF::updateVirtualDoppler(const Eigen::Vector3d& velocity_meas, const Eigen::Matrix3d& R_virtual) {
-    // Virtual Doppler measurement for velocity constraints
-    auto virtual_model = [](const State& state) -> Eigen::Vector3d {
-        return state.v_ECEF;
-    };
-    
-    measurements_manager_->updateMeasurement<3>(velocity_meas, R_virtual, virtual_model);
-}
-
-void UKF::updateScalarPseudo(double z_meas, double z_pred, double S_pred, double R_scalar) {
-    // Generic scalar pseudo-measurement
-    Eigen::Matrix<double, 1, 1> measurement;
-    measurement << z_meas;
-    
-    Eigen::Matrix<double, 1, 1> R;
-    R << R_scalar;
-    
-    auto scalar_model = [z_pred](const State& state) -> Eigen::Matrix<double, 1, 1> {
-        Eigen::Matrix<double, 1, 1> result;
-        result << z_pred;  // Use provided prediction
-        return result;
-    };
-    
-    measurements_manager_->updateMeasurement<1>(measurement, R, scalar_model);
-}
+// updateScalarPseudo also removed - not used

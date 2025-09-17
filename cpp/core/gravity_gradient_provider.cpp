@@ -16,17 +16,12 @@ bool GravityGradientProvider::loadEGM2020(const std::string& data_path) {
     }
     
     if (!file.is_open()) {
-        std::cerr << "WARNING: EGM data not found, using synthetic gravity\n";
-        // Initialize with synthetic data for testing
-        coeffs_ = std::make_unique<SHCoefficients>();
-        coeffs_->max_degree = 360;  
-        coeffs_->C.resize(66000, 0.0);  
-        coeffs_->S.resize(66000, 0.0);
-        
-        // Generate minimal synthetic coefficients for testing only
-        coeffs_->C[coeffs_->idx(2, 0)] = -1.082636e-3;  // J2 term
-        // All other coefficients remain zero
-        return true;
+        std::cerr << "FATAL ERROR: Real EGM2008 data REQUIRED - NO SYNTHETIC FALLBACK!\n";
+        std::cerr << "Tried to load from:\n";
+        std::cerr << "  - " << real_data_path << "\n";
+        std::cerr << "  - " << data_path << "\n";
+        std::cerr << "Please download real EGM2008 data and place at expected location.\n";
+        return false;
     }
     
     // Read actual EGM data
