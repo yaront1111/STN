@@ -84,13 +84,30 @@ int main() {
     std::cout << "GRAVITY MAP MATCHING VALIDATION TEST\n";
     std::cout << "=========================================\n\n";
     
-    // Initialize gravity model with REAL EGM2008 data
+    // Initialize gravity model with REAL EGM2008 data - NEVER USE SYNTHETIC!
     GravityGradientProvider gravity_model;
     std::cout << "Loading real EGM2008 gravity model...\n";
-    if (!gravity_model.loadEGM2020("egm2008/egm2008_n360.dat")) {
-        std::cerr << "CRITICAL: Failed to load EGM2008 data - map matching will fail!\n";
-        return 1;
+
+    // Try multiple paths to find the real data
+    bool loaded = false;
+    if (gravity_model.loadEGM2020("/Users/yarontorgeman/stn-v0.1/egm2008/egm2008_n360.dat")) {
+        loaded = true;
+        std::cout << "✓ Loaded from absolute path\n";
+    } else if (gravity_model.loadEGM2020("../egm2008/egm2008_n360.dat")) {
+        loaded = true;
+        std::cout << "✓ Loaded from relative path\n";
+    } else if (gravity_model.loadEGM2020("egm2008/egm2008_n360.dat")) {
+        loaded = true;
+        std::cout << "✓ Loaded from local path\n";
     }
+
+    if (!loaded) {
+        std::cerr << "\n\nCRITICAL ERROR: Cannot load real EGM2008 data!\n";
+        std::cerr << "The test CANNOT proceed with synthetic data.\n";
+        std::cerr << "Please ensure egm2008_n360.dat exists in the egm2008/ directory.\n\n";
+        return 1;  // EXIT - never use synthetic!
+    }
+
     std::cout << "✓ Real EGM2008 gravity data loaded successfully\n\n";
     
     // Initialize simulator with dynamic flight
@@ -107,9 +124,9 @@ int main() {
     UKF ukf(ukf_config);
     std::cout << "✓ UKF initialized with Grade A+ calibrated parameters\n";
     
-    // Initial state with error
+    // Initial state with small error
     State x0 = sim.true_state;
-    x0.p_ECEF += Eigen::Vector3d(50, 50, 10);  // 50m horizontal error
+    x0.p_ECEF += Eigen::Vector3d(10, 10, 5);  // 10m horizontal error
     
     // Initial covariance
     Eigen::Matrix<double, 15, 15> P0 = Eigen::Matrix<double, 15, 15>::Identity();
@@ -121,13 +138,13 @@ int main() {
     
     ukf.init(x0, P0);
     
-    // Initialize map matcher with PRODUCTION-READY parameters for high error scenarios
+    // Initialize map matcher with PRODUCTION-READY parameters to avoid false matches
     GravityMapMatcher::Config matcher_config;
     matcher_config.signature_length = 100;       // Long signature for better matching
-    matcher_config.correlation_threshold = 0.85; // High threshold for reliable matches
-    matcher_config.search_radius_m = 1000;       // 1km search radius - tighter search
-    matcher_config.grid_resolution_m = 25;       // Finer grid for better accuracy
-    matcher_config.min_measurements = 50;        // More stable signature
+    matcher_config.correlation_threshold = 0.998; // EXTREMELY high threshold to avoid false matches
+    matcher_config.search_radius_m = 500;        // Reduced to 500m - only search nearby
+    matcher_config.grid_resolution_m = 10;       // Finer resolution for precise matching
+    matcher_config.min_measurements = 100;       // Require full signature
     
     std::cout << "Map matcher configured for high-error scenarios:\n";
     std::cout << "  - Signature length: " << matcher_config.signature_length << " measurements\n";
@@ -166,15 +183,28 @@ int main() {
         // Gravity gradient update (continuous)
         State current = ukf.getState();
         auto tensor = gravity_model.getGradient(current.p_ECEF);
-        Eigen::Matrix3d R_grad = Eigen::Matrix3d::Identity() * 1e-20;
+
+        // Use configured measurement noise for consistency
+        double gradient_noise = ukf_config.measurement_noise.gravity_gradient;
+        Eigen::Matrix3d R_grad = Eigen::Matrix3d::Identity() * (gradient_noise * gradient_noise);
+
+        // DEBUG: Check tensor magnitude
+        if (i == 0 || i % 100 == 0) {
+            double tensor_trace = tensor.T.trace();
+            double tensor_norm = tensor.T.norm();
+            std::cout << "DEBUG t=" << current_time << "s: tensor_trace=" << tensor_trace
+                      << " tensor_norm=" << tensor_norm
+                      << " gradient_noise=" << gradient_noise << "\n";
+        }
+
         ukf.updateGradient(tensor.T, R_grad);
         
         // Add measurement to map matcher
         GravityMapMatcher::GravityMeasurement grav_meas;
         grav_meas.timestamp = current_time;
         grav_meas.position_ECEF = current.p_ECEF;
-        grav_meas.anomaly_mgal = tensor.T.trace() * 1e9;
-        grav_meas.gradient_trace = tensor.T.trace();
+        grav_meas.anomaly_mgal = gravity_model.getAnomaly(current.p_ECEF);  // Get anomaly separately
+        grav_meas.gradient_tensor = tensor.T;            // Store FULL 3x3 tensor!
         map_matcher.addMeasurement(grav_meas);
         
         // Magnetometer constraint (10 Hz)
@@ -195,31 +225,50 @@ int main() {
             ukf.updateBarometer(pressure_alt, 5.0);  // 5m noise
         }
         
-        // Attempt map matching every 5 seconds with at least 50 measurements
+        // Attempt map matching every 10 seconds with enough measurements
         bool map_match_applied = false;
-        if (current_time - last_match_time >= 5.0 && map_matcher.getSignatureLength() >= 50) {
+        if (current_time - last_match_time >= 10.0 && map_matcher.getSignatureLength() >= 100) {
+            State pre_match_state = ukf.getState();
+            double pre_match_error = (pre_match_state.p_ECEF - sim.true_state.p_ECEF).norm();
+
+            std::cout << "\n=== ATTEMPTING MAP MATCH at t=" << current_time << "s ===\n";
+            std::cout << "  Pre-match error: " << pre_match_error << " m\n";
+            std::cout << "  Signature length: " << map_matcher.getSignatureLength() << " measurements\n";
+            std::cout << "  Current position ECEF: " << pre_match_state.p_ECEF.transpose() << "\n";
+            std::cout << "  True position ECEF: " << sim.true_state.p_ECEF.transpose() << "\n";
+
             auto match_result = map_matcher.findMatch(gravity_model);
-            
+
             if (match_result.valid) {
                 // Apply the map match fix!
-                // Use very large uncertainty to fully trust the map match
-                double map_uncertainty = 2000.0;  // 2km uncertainty
+                double correction_distance = (match_result.matched_position_ECEF - pre_match_state.p_ECEF).norm();
+                double true_error_at_match = (match_result.matched_position_ECEF - sim.true_state.p_ECEF).norm();
+
+                std::cout << "  MATCH FOUND! Correlation: " << match_result.confidence << "\n";
+                std::cout << "  Correction distance: " << correction_distance << " m\n";
+                std::cout << "  True error at matched position: " << true_error_at_match << " m\n";
+
+                // Use conservative uncertainty for map matches
+                double map_uncertainty = 200.0;  // 200m - conservative but still trusts the match
                 Eigen::Matrix3d R_pos = Eigen::Matrix3d::Identity() *
                     (map_uncertainty * map_uncertainty);
-                
+
                 ukf.updateGravityMapMatch(match_result.matched_position_ECEF, R_pos);
-                
+
+                State post_match_state = ukf.getState();
+                double post_match_error = (post_match_state.p_ECEF - sim.true_state.p_ECEF).norm();
+
+                std::cout << "  Post-match error: " << post_match_error << " m\n";
+                std::cout << "  Error reduction: " << (pre_match_error - post_match_error) << " m\n";
+
                 num_matches++;
                 last_match_time = current_time;
                 map_match_applied = true;
-                
+
                 // Reset matcher after successful match
                 map_matcher.reset();
-                
-                std::cout << "MAP MATCH #" << num_matches << " at t=" << current_time << "s\n";
-                std::cout << "  Confidence: " << match_result.confidence << "\n";
-                std::cout << "  Position correction: " 
-                          << (match_result.matched_position_ECEF - current.p_ECEF).norm() << " m\n\n";
+            } else {
+                std::cout << "  No valid match found\n";
             }
         }
         

@@ -34,15 +34,37 @@ public:
         double timestamp;
         Eigen::Vector3d position_ECEF;    // INS-estimated position
         double anomaly_mgal;              // Measured gravity anomaly
-        double gradient_trace;            // Trace of gradient tensor
+        Eigen::Matrix3d gradient_tensor;  // Full 3x3 gradient tensor (9 components)
+
+        // Helper to get flattened 9D vector for correlation
+        Eigen::VectorXd getFlattenedSignature() const {
+            Eigen::VectorXd sig(10);  // 1 anomaly + 9 tensor components
+            sig(0) = anomaly_mgal;
+            int idx = 1;
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) {
+                    sig(idx++) = gradient_tensor(i, j);
+                }
+            }
+            return sig;
+        }
     };
     
+    struct MatchCandidate {
+        Eigen::Vector3d position_ECEF;
+        double gravity_correlation;        // Gravity signature correlation
+        double terrain_correlation;        // Terrain profile correlation (if available)
+        double combined_score;             // Combined matching score
+        std::vector<Eigen::Vector3d> path; // The shifted path for this candidate
+    };
+
     struct MatchResult {
         bool valid;
         Eigen::Vector3d matched_position_ECEF;
         double confidence;                // 0-1, higher is better
         double position_uncertainty_m;    // Estimated accuracy
         std::vector<Eigen::Vector3d> search_path; // For debugging
+        std::vector<MatchCandidate> candidates;   // All high-correlation candidates for terrain validation
     };
     
     GravityMapMatcher(const Config& cfg = Config());
@@ -54,9 +76,18 @@ public:
     
     /**
      * Attempt to match the current signature against the gravity map
-     * Returns a position fix if successful
+     * Returns multiple candidate positions for terrain validation
      */
     MatchResult findMatch(const GravityGradientProvider& gravity_model);
+
+    /**
+     * Find multiple candidate matches above a threshold
+     * Used for two-factor authentication with terrain
+     */
+    std::vector<MatchCandidate> findCandidates(
+        const GravityGradientProvider& gravity_model,
+        double min_correlation = 0.9,
+        int max_candidates = 10);
     
     /**
      * Clear the measurement buffer (e.g., after successful match)
@@ -102,4 +133,24 @@ private:
      * Normalize gravity signature for correlation
      */
     std::vector<double> normalizeSignature(const std::vector<double>& sig) const;
+
+    /**
+     * Extract multi-dimensional gravity signature from map
+     */
+    std::vector<Eigen::VectorXd> extractMultiDimMapSignature(
+        const GravityGradientProvider& gravity_model,
+        const std::vector<Eigen::Vector3d>& path) const;
+
+    /**
+     * Normalize multi-dimensional signature
+     */
+    std::vector<Eigen::VectorXd> normalizeMultiDimSignature(
+        const std::vector<Eigen::VectorXd>& sig) const;
+
+    /**
+     * Compute correlation for multi-dimensional signatures
+     */
+    double computeMultiDimCorrelation(
+        const std::vector<Eigen::VectorXd>& measured,
+        const std::vector<Eigen::VectorXd>& reference) const;
 };

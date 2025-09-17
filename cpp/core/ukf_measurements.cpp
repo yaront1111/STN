@@ -86,10 +86,29 @@ void UKFMeasurements::updateMeasurementInternal(
     // Check if S is positive definite
     Eigen::LLT<Eigen::Matrix<double, MeasDim, MeasDim>> llt_check(S);
     if (llt_check.info() != Eigen::Success) {
-        std::cout << "ERROR: Innovation covariance S is not positive definite!\n";
-        std::cout << "S matrix:\n" << S << "\n";
-        std::cout << "Eigenvalues: " << Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, MeasDim, MeasDim>>(S).eigenvalues().transpose() << "\n";
-        return;
+        // Try to fix by adding small regularization
+        double regularization = 1e-9;
+        S += Eigen::Matrix<double, MeasDim, MeasDim>::Identity() * regularization;
+
+        // Check again
+        Eigen::LLT<Eigen::Matrix<double, MeasDim, MeasDim>> llt_check2(S);
+        if (llt_check2.info() != Eigen::Success) {
+            // Still not positive definite - use stronger regularization
+            regularization = 1e-6;
+            S += Eigen::Matrix<double, MeasDim, MeasDim>::Identity() * regularization;
+
+            Eigen::LLT<Eigen::Matrix<double, MeasDim, MeasDim>> llt_check3(S);
+            if (llt_check3.info() != Eigen::Success) {
+                // Give up and skip this measurement
+                std::cout << "WARNING: Innovation covariance S cannot be fixed, skipping measurement\n";
+                if (MeasDim <= 3) {  // Only print small matrices
+                    std::cout << "S matrix:\n" << S << "\n";
+                }
+                return;
+            }
+        }
+        // Successfully regularized
+        std::cout << "INFO: Innovation covariance regularized with eps=" << regularization << "\n";
     }
     
     // Compute innovation
@@ -158,10 +177,16 @@ void UKFMeasurements::updateGravityGradient(const Eigen::Matrix3d& measured, con
     // Convert 3x3 matrix to 9D vector for measurement update
     Eigen::VectorXd measured_vec = flattenMatrix(measured);
     Eigen::Matrix<double, 9, 9> noise_cov = Eigen::Matrix<double, 9, 9>::Zero();
-    
-    // Set noise covariance as block diagonal (assuming uncorrelated tensor elements)
+
+    // Set noise covariance as diagonal with proper scaling
+    // Use the average of the R matrix diagonal as the noise level
+    double noise_level = R.trace() / 3.0;
+
+    // Ensure minimum noise for numerical stability
+    noise_level = std::max(noise_level, 1e-10);
+
     for (int i = 0; i < 9; ++i) {
-        noise_cov(i, i) = R(i/3, i%3);
+        noise_cov(i, i) = noise_level;  // Use same noise for all components
     }
     
     auto measurement_model = [this](const State& state) -> Eigen::Matrix<double, 9, 1> {

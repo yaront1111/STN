@@ -31,6 +31,8 @@ add_library(gravity_core STATIC
     cpp/core/gravity_gradient_provider.cpp
     cpp/core/gravity_map_matcher.cpp
     cpp/core/config_reader.cpp
+    cpp/core/terrain_correlator.cpp
+    cpp/core/srtm_provider.cpp
 )
 
 target_include_directories(gravity_core PUBLIC
@@ -68,6 +70,15 @@ add_executable(test_gravity_map_match
 )
 
 target_link_libraries(test_gravity_map_match
+    gravity_core
+)
+
+# Two-factor authentication test
+add_executable(test_two_factor
+    test_two_factor.cpp
+)
+
+target_link_libraries(test_two_factor
     gravity_core
 )
 

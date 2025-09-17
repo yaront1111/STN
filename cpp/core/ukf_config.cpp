@@ -92,20 +92,21 @@ void UKFConfig::setGradeAOptimal() {
     beta = 2.0;       // Gaussian assumption
     kappa = 0.0;      // Standard setting
     
-    // High process noise to maintain covariance for map matching
-    process_noise.position = 10.0;     // High to maintain uncertainty
-    process_noise.velocity = 50.0;     // Very high velocity uncertainty
-    process_noise.attitude = 0.1;      // Higher attitude noise
-    process_noise.accel_bias = 0.1;    // Higher bias drift
-    process_noise.gyro_bias = 1e-3;    // Higher gyro bias drift
+    // Balanced process noise for realistic IMU drift
+    process_noise.position = 5.0;      // Moderate position uncertainty
+    process_noise.velocity = 20.0;     // Account for IMU integration errors
+    process_noise.attitude = 0.1;      // Realistic attitude drift
+    process_noise.accel_bias = 0.01;   // Tactical-grade accelerometer bias drift
+    process_noise.gyro_bias = 1e-3;    // Tactical-grade gyro bias drift
     
-    // Calibrated measurement noise based on test results
-    measurement_noise.gravity_gradient = 1.41e7;   // Calibrated from NIS analysis (sqrt(2e15))
-    measurement_noise.gravity_anomaly = 3.16e10;   // Calibrated from innovations (sqrt(1e20))  
-    measurement_noise.magnetometer = 0.05;         // Tight magnetometer noise
-    measurement_noise.barometer = 5.0;             // Good barometer
+    // Calibrated measurement noise - FIXED for numerical stability
+    // These values must be large enough to prevent singular covariance matrices
+    measurement_noise.gravity_gradient = 10.0;     // 10 Eötvös noise (tensor values are ~50 E)
+    measurement_noise.gravity_anomaly = 1.0;       // 1 mGal anomaly noise
+    measurement_noise.magnetometer = 50e-9;        // 50 nT magnetometer noise (Tesla)
+    measurement_noise.barometer = 5.0;             // 5m barometer altitude noise
     measurement_noise.radar_altimeter = 0.5;       // High-quality radar
-    measurement_noise.map_match_position = 25.0;   // Conservative map matching
+    measurement_noise.map_match_position = 100.0;  // Conservative map matching uncertainty
     
     // Tighter gating for Grade A+
     numerical.innovation_outlier_chi2 = 7.815;     // 95% confidence instead of 99%
