@@ -11,6 +11,7 @@
 // Forward declarations for modular architecture
 class UKFSigmaPoints;
 class UKFMeasurements;
+class GravityGradientProvider;
 
 /**
  * Stable UKF Implementation using Error-State Formulation
@@ -48,6 +49,11 @@ public:
      * Initialize filter with state and covariance
      */
     void init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P0);
+
+    /**
+     * Set gravity provider for measurement predictions
+     */
+    void setGravityProvider(GravityGradientProvider* provider);
     
     /**
      * Prediction step with IMU data
@@ -148,6 +154,7 @@ private:
     // Modular components (using unique_ptr)
     std::unique_ptr<UKFSigmaPoints> sigma_points_manager_;
     std::unique_ptr<UKFMeasurements> measurements_manager_;
+    GravityGradientProvider* gravity_provider_ = nullptr;  // Non-owning pointer
     
     // Filter integrity monitoring using IntegrityMonitor
     IntegrityMonitor::Stats integrity_stats_;

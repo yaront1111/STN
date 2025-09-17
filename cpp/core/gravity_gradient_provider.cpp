@@ -6,47 +6,45 @@
 #include <cassert>
 
 bool GravityGradientProvider::loadEGM2020(const std::string& data_path) {
-    // Use provided path directly
     std::ifstream file(data_path, std::ios::binary);
+    std::string used_path = data_path;
 
     if (!file.is_open()) {
-        // Try alternate hardcoded path as fallback
         std::string alt_path = "egm2008/egm2008_n360.dat";
         file.open(alt_path, std::ios::binary);
-
-        if (!file.is_open()) {
-            std::cerr << "FATAL ERROR: Real EGM2008 data REQUIRED - NO SYNTHETIC FALLBACK!\n";
-            std::cerr << "Tried to load from:\n";
-            std::cerr << "  - " << data_path << "\n";
-            std::cerr << "  - " << alt_path << "\n";
-            std::cerr << "Please download real EGM2008 data and place at expected location.\n";
-            return false;
-        }
+        used_path = alt_path;
+    }
+    if (!file.is_open()) {
+        std::cerr << "FATAL: Real EGM data required (no synthetic fallback).\n"
+                  << "Tried:\n  - " << data_path << "\n  - egm2008/egm2008_n360.dat\n";
+        return false;
     }
 
-    // Read actual EGM data
-    std::cout << "Loading real EGM2008 data from: " << data_path << "\n";
     coeffs_ = std::make_unique<SHCoefficients>();
+
+    // Minimal header: [int max_degree] then C and S arrays of doubles.
     file.read(reinterpret_cast<char*>(&coeffs_->max_degree), sizeof(int));
-    
-    int num_coeffs = (coeffs_->max_degree + 1) * (coeffs_->max_degree + 2) / 2;
+    if (!file || coeffs_->max_degree <= 0 || coeffs_->max_degree > 2190) {
+        std::cerr << "ERROR: Bad EGM header or unsupported degree: "
+                  << coeffs_->max_degree << "\n";
+        return false;
+    }
+
+    const int num_coeffs = (coeffs_->max_degree + 1) * (coeffs_->max_degree + 2) / 2;
     coeffs_->C.resize(num_coeffs);
     coeffs_->S.resize(num_coeffs);
-    
-    std::cout << "  Max degree: " << coeffs_->max_degree << "\n";
-    std::cout << "  Num coefficients: " << num_coeffs << "\n";
-    
-    // Read C coefficients
-    for (int i = 0; i < num_coeffs; i++) {
-        file.read(reinterpret_cast<char*>(&coeffs_->C[i]), sizeof(double));
+
+    file.read(reinterpret_cast<char*>(coeffs_->C.data()), sizeof(double) * num_coeffs);
+    file.read(reinterpret_cast<char*>(coeffs_->S.data()), sizeof(double) * num_coeffs);
+
+    if (!file) {
+        std::cerr << "ERROR: Truncated EGM coefficient file: " << used_path << "\n";
+        return false;
     }
-    
-    // Read S coefficients  
-    for (int i = 0; i < num_coeffs; i++) {
-        file.read(reinterpret_cast<char*>(&coeffs_->S[i]), sizeof(double));
-    }
-    
-    std::cout << "✓ Loaded REAL EGM gravity data to degree " << coeffs_->max_degree << "\n";
+
+    std::cout << "✓ Loaded EGM data from: " << used_path
+              << " | max degree: " << coeffs_->max_degree
+              << " | coeffs: " << num_coeffs << "\n";
     return true;
 }
 
@@ -59,159 +57,56 @@ GravityGradientProvider::toSpherical(const Eigen::Vector3d& pos_ECEF) const {
     return coords;
 }
 
-GravityGradientProvider::LegendreTerms 
+GravityGradientProvider::LegendreTerms
 GravityGradientProvider::computeLegendre(double theta, int max_degree) const {
-    // Holmes-Featherstone Stable ALF Computation
-    // Input validation
-    if (theta < 0.0 || theta > M_PI || max_degree < 0 || max_degree > 2190) {
-        std::cerr << "ERROR: Invalid input to computeLegendre\n";
-        LegendreTerms terms;
-        int size = std::max(1, max_degree + 1);
-        terms.P = Eigen::MatrixXd::Zero(size, size);
-        terms.dP = Eigen::MatrixXd::Zero(size, size);
-        return terms;
-    }
-    
     LegendreTerms terms;
-    int size = max_degree + 1;
-    terms.P = Eigen::MatrixXd::Zero(size, size);
-    terms.dP = Eigen::MatrixXd::Zero(size, size);
+    const int N = std::max(0, std::min(max_degree, 2190)) + 1;
+    terms.P  = Eigen::MatrixXd::Zero(N, N);
+    terms.dP = Eigen::MatrixXd::Zero(N, N);
+
+    if (N == 0) return terms;
+
+    const double ct = std::cos(theta);
+    const double st = std::max(1e-14, std::sin(theta)); // protect poles
     
-    double cos_theta = std::cos(theta);
-    double sin_theta = std::sin(theta);
-    
-    // Constants for numerical stability
-    const double SCALING_THRESHOLD = 1e140;
-    const double OVERFLOW_THRESHOLD = 1e280;
-    
-    std::vector<double> scale_factors(size, 1.0);
-    
-    try {
-        // Step 1: Compute sectorials P_m^m with Holmes-Featherstone scaling
-        terms.P(0, 0) = 1.0;  // P_0^0 = 1
-        scale_factors[0] = 1.0;
-        
-        if (max_degree >= 1) {
-            // P_1^1 = sqrt(3) * sin(theta)
-            terms.P(1, 1) = std::sqrt(3.0) * sin_theta;
-            scale_factors[1] = 1.0;
-            
-            // Recursive sectorials P_m^m for m >= 2
-            for (int m = 2; m <= max_degree; ++m) {
-                double factor = std::sqrt((2.0 * m + 1.0) / (2.0 * m));
-                double new_value = factor * sin_theta * terms.P(m-1, m-1);
-                
-                // Apply sectorial scaling if needed
-                double scale_adjustment = 1.0;
-                if (std::abs(new_value) > SCALING_THRESHOLD) {
-                    scale_adjustment = std::pow(10.0, std::floor(m * 0.3));
-                    new_value /= scale_adjustment;
-                }
-                
-                terms.P(m, m) = new_value;
-                scale_factors[m] = scale_factors[m-1] * scale_adjustment;
-                
-                if (!std::isfinite(new_value) || std::abs(new_value) > OVERFLOW_THRESHOLD) {
-                    throw std::runtime_error("Sectorial computation unstable at m=" + std::to_string(m));
-                }
-            }
-        }
-        
-        // Step 2: Compute zonal harmonics P_n^0
-        if (max_degree >= 1) {
-            terms.P(1, 0) = cos_theta;
-            
-            for (int n = 2; n <= max_degree; ++n) {
-                // Three-term recurrence: P_n^0 = ((2n-1)*cos(theta)*P_{n-1}^0 - (n-1)*P_{n-2}^0) / n
-                terms.P(n, 0) = ((2.0*n - 1.0) * cos_theta * terms.P(n-1, 0) - (n-1.0) * terms.P(n-2, 0)) / n;
-                
-                if (!std::isfinite(terms.P(n, 0))) {
-                    std::cerr << "WARNING: Zonal P(" << n << ",0) unstable, setting to zero\n";
-                    terms.P(n, 0) = 0.0;
-                }
-            }
-        }
-        
-        // Step 3: Compute tesseral harmonics P_n^m (n > m > 0)
-        for (int m = 1; m <= max_degree; ++m) {
-            // First tesseral: P_{m+1}^m
-            if (m + 1 <= max_degree) {
-                double factor = std::sqrt(2.0 * m + 3.0);
-                terms.P(m+1, m) = factor * cos_theta * terms.P(m, m);
-            }
-            
-            // Higher tesserals using three-term recurrence
-            for (int n = m + 2; n <= max_degree; ++n) {
-                double a_nm = std::sqrt(((2.0*n + 1.0) * (2.0*n - 1.0)) / ((n + m) * (n - m)));
-                double b_nm = std::sqrt(((2.0*n + 1.0) * (n - m - 1.0) * (n + m - 1.0)) / 
-                                       ((n + m) * (n - m) * (2.0*n - 3.0)));
-                
-                terms.P(n, m) = a_nm * cos_theta * terms.P(n-1, m) - b_nm * terms.P(n-2, m);
-                
-                if (!std::isfinite(terms.P(n, m))) {
-                    terms.P(n, m) = 0.0;
-                }
-            }
-        }
-        
-        // Step 4: Compute analytical derivatives dP/dtheta
-        terms.dP(0, 0) = 0.0;  // dP_0^0/dtheta = 0
-        
-        if (max_degree >= 1) {
-            terms.dP(1, 0) = -sin_theta;  // dP_1^0/dtheta = -sin(theta)
-            terms.dP(1, 1) = std::sqrt(3.0) * cos_theta;  // dP_1^1/dtheta = sqrt(3)*cos(theta)
-        }
-        
-        // General derivatives using analytical formulas
-        for (int n = 2; n <= max_degree; ++n) {
-            for (int m = 0; m <= n; ++m) {
-                if (m == 0) {
-                    // Zonal derivative: Use relation with P_n^1
-                    if (std::abs(sin_theta) > 1e-10) {
-                        terms.dP(n, 0) = -std::sqrt(n * (n + 1.0)) * terms.P(n, 1);
-                    } else {
-                        terms.dP(n, 0) = 0.0;
-                    }
-                } else if (m == n) {
-                    // Sectorial derivative
-                    terms.dP(n, n) = n * cos_theta * terms.P(n, n);
-                    if (std::abs(sin_theta) > 1e-10) {
-                        terms.dP(n, n) /= sin_theta;
-                    }
-                } else {
-                    // Tesseral derivative using three-term relation
-                    double factor1 = (m + 1 <= n) ? std::sqrt((n - m) * (n + m + 1.0)) : 0.0;
-                    double term1 = (m + 1 <= n) ? factor1 * terms.P(n, m+1) : 0.0;
-                    
-                    double factor2 = (m > 0) ? std::sqrt((n + m) * (n - m + 1.0)) : 0.0;
-                    double term2 = (m > 0) ? factor2 * terms.P(n, m-1) : 0.0;
-                    
-                    terms.dP(n, m) = 0.5 * (term1 - term2);
-                }
-                
-                // Stability check
-                if (!std::isfinite(terms.dP(n, m))) {
-                    terms.dP(n, m) = 0.0;
-                }
-            }
-        }
-        
-        // Apply inverse scaling to get true fully-normalized values
-        for (int n = 0; n <= max_degree; ++n) {
-            for (int m = 0; m <= n; ++m) {
-                if (m < scale_factors.size()) {
-                    terms.P(n, m) *= scale_factors[m];
-                    terms.dP(n, m) *= scale_factors[m];
-                }
-            }
-        }
-        
-    } catch (const std::exception& e) {
-        std::cerr << "ERROR in stable ALF computation: " << e.what() << std::endl;
-        // Zero out all terms in case of error
-        terms.P.setZero();
-        terms.dP.setZero();
+    // Fully-normalized ALFs (EGM uses fully-normalized)
+    terms.P(0,0) = 1.0;
+    if (N == 1) return terms;
+
+    // Sectorials P_m^m
+    terms.P(1,1) = std::sqrt(3.0) * st;
+    for (int m = 2; m < N; ++m) {
+        // P_m^m = sqrt((2m+1)/(2m)) * st * P_{m-1}^{m-1}
+        terms.P(m,m) = std::sqrt((2.0*m + 1.0)/(2.0*m)) * st * terms.P(m-1,m-1);
     }
+
+    // Tesseral first step: P_{m+1}^m
+    for (int m = 0; m + 1 < N; ++m) {
+        // P_{m+1}^m = sqrt(2m+3) * ct * P_m^m
+        terms.P(m+1,m) = std::sqrt(2.0*m + 3.0) * ct * terms.P(m,m);
+    }
+
+    // Tesseral general: P_n^m, n >= m+2
+    for (int m = 0; m < N; ++m) {
+        for (int n = m + 2; n < N; ++n) {
+            // P_n^m = a_nm * ct * P_{n-1}^m - b_nm * P_{n-2}^m
+            const double a_nm = std::sqrt(((2.0*n + 1.0)*(2.0*n - 1.0))/((n+m)*(n-m)));
+            const double b_nm = std::sqrt(((2.0*n + 1.0)*(n+m-1.0)*(n-m-1.0)) /
+                                          ((n+m)*(n-m)*(2.0*n - 3.0)));
+            terms.P(n,m) = a_nm * ct * terms.P(n-1,m) - b_nm * terms.P(n-2,m);
+        }
+    }
+
+    // Derivatives (fully-normalized): for all n,m
+    // dP_n^m/dθ = n*cotθ*P_n^m - sqrt(n^2 - m^2)/sinθ * P_{n-1}^m
+    const double cot = ct / st;
+    for (int n = 1; n < N; ++n) {
+        for (int m = 0; m <= n; ++m) {
+            const double s = std::sqrt(std::max(0.0, double(n*n - m*m)));
+            terms.dP(n,m) = n * cot * terms.P(n,m) - (s / st) * terms.P(n-1,m);
+        }
+    }
+    // dP_0^0 = 0 already
     
     return terms;
 }
@@ -259,11 +154,8 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
             double C_nm = coeffs_->C[idx];
             double S_nm = coeffs_->S[idx];
             
-            // Check for valid Legendre values and reasonable coefficients
-            if (!std::isfinite(legendre.P(n, m)) || std::abs(legendre.P(n, m)) > 1e6) {
-                continue;
-            }
-            if (std::abs(C_nm) > 1e-2 || std::abs(S_nm) > 1e-2) {  // Reasonable EGM bound
+            // Check for valid Legendre values
+            if (!std::isfinite(legendre.P(n, m))) {
                 continue;
             }
             
@@ -281,16 +173,32 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
             // V_rt = (n+1) * dP/dtheta term
             V_rt += (n + 1) * ar_pow * legendre.dP(n, m) * CS_sum;
             
-            // V_tt = second theta derivative
-            if (std::abs(legendre.dP(n, m)) < 1e6) {
-                V_tt += ar_pow * legendre.dP(n, m) * legendre.dP(n, m) * CS_sum;
+            // V_tt = second theta derivative (correct formula)
+            // V_tt = ar^n * [(m^2/sin^2(θ) - n(n+1))P_nm - (cos(θ)/sin(θ))dP_nm] * CS_sum
+            if (std::abs(sin_theta) > 1e-6) {
+                double P_term_for_Vtt = (m*m / (sin_theta*sin_theta) - (n+1.0)*n) * legendre.P(n,m) -
+                                        (cos_theta/sin_theta) * legendre.dP(n,m);
+                V_tt += ar_pow * P_term_for_Vtt * CS_sum;
             }
             
-            // Longitude derivatives (phi terms)
+            // Phi-related derivatives
+            // V_rp and V_tp are proportional to m (zero for m=0)
             if (m > 0 && std::abs(sin_theta) > 1e-6) {
-                V_rp += (n + 1) * ar_pow * m / sin_theta * legendre.P(n, m) * CS_diff;
-                V_tp += ar_pow * m / sin_theta * legendre.dP(n, m) * CS_diff;
-                V_pp += ar_pow * m * m / (sin_theta * sin_theta) * legendre.P(n, m) * CS_sum;
+                double CS_diff_m = m * (S_nm * cos_m_lon[m] - C_nm * sin_m_lon[m]);
+
+                // V_rp = (n+1) * ar^n * P_nm * m * CS_diff
+                V_rp += ar_pow * (n + 1.0) * legendre.P(n,m) * CS_diff_m;
+
+                // V_tp = ar^n * m/sin(θ) * [dP_nm - (cos(θ)/sin(θ))P_nm] * CS_diff
+                V_tp += ar_pow * (m / sin_theta) * (legendre.dP(n,m) - (cos_theta/sin_theta) * legendre.P(n,m)) * CS_diff_m;
+            }
+
+            // V_pp for ALL m (this was the critical bug - was only computed for m>0)
+            // V_pp = ar^n * [(n(n+1) - m^2/sin^2(θ))P_nm + (cos(θ)/sin(θ))dP_nm] * CS_sum
+            if (std::abs(sin_theta) > 1e-6) {
+                double P_term_for_Vpp = ((n+1.0)*n - m*m/(sin_theta*sin_theta)) * legendre.P(n,m) +
+                                        (cos_theta/sin_theta) * legendre.dP(n,m);
+                V_pp += ar_pow * P_term_for_Vpp * CS_sum;
             }
         }
     }
@@ -298,33 +206,34 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
     // Apply proper scaling for gravity gradients
     // Second derivatives need GM/r^3 base scaling
     double base_scale = GM / (coords.r * coords.r * coords.r);
-    
-    // Convert to Eötvös units (1 Eötvös = 1e-9 s^-2) 
-    double final_scale = base_scale * 1e9;
-    
-    V_rr *= final_scale;
-    V_rt *= final_scale;
-    V_rp *= final_scale;
-    V_tt *= final_scale;
-    V_tp *= final_scale;
-    V_pp *= final_scale;
-    
-    // Build gradient tensor in spherical coordinates
-    // NOTE: In spherical coordinates, the physical gradient components are:
-    // G_θθ = V_tt/r², G_φφ = V_pp/(r²sin²θ), G_rθ = V_rt/r, etc.
-    // We need to apply proper metric scaling
-    Eigen::Matrix3d G_spherical;
-    G_spherical << V_rr, V_rt/coords.r, V_rp/(coords.r*sin_theta),
+
+    // Build anomalous gradient tensor in spherical coordinates with metric scaling
+    Eigen::Matrix3d G_anomalous;
+    G_anomalous << V_rr, V_rt/coords.r, V_rp/(coords.r*sin_theta),
                    V_rt/coords.r, V_tt/(coords.r*coords.r), V_tp/(coords.r*coords.r*sin_theta),
                    V_rp/(coords.r*sin_theta), V_tp/(coords.r*coords.r*sin_theta), V_pp/(coords.r*coords.r*sin_theta*sin_theta);
 
+    // Scale anomalous part to Eötvös
+    G_anomalous *= base_scale * 1e9;
+
+    // *** ADD THE PRIMARY (POINT-MASS) GRADIENT ***
+    // Primary field gradient in spherical coordinates (already with metric)
+    Eigen::Matrix3d G_primary = Eigen::Matrix3d::Zero();
+    double primary_scale = base_scale * 1e9;
+    G_primary(0, 0) = 2.0 * primary_scale;   // G_rr = 2GM/r^3
+    G_primary(1, 1) = -1.0 * primary_scale;  // G_θθ = -GM/r^3
+    G_primary(2, 2) = -1.0 * primary_scale;  // G_φφ = -GM/r^3
+
+    // Total gradient = primary + anomalous
+    Eigen::Matrix3d G_total_spherical = G_primary + G_anomalous;
+
     // Enforce Laplace equation (trace = 0 in free space)
-    double trace = G_spherical.trace();
+    double trace = G_total_spherical.trace();
     if (std::abs(trace) > 0.1) {  // More than 0.1 Eötvös off
         // Redistribute trace error equally among diagonal components
-        G_spherical(0,0) -= trace/3.0;
-        G_spherical(1,1) -= trace/3.0;
-        G_spherical(2,2) -= trace/3.0;
+        G_total_spherical(0,0) -= trace/3.0;
+        G_total_spherical(1,1) -= trace/3.0;
+        G_total_spherical(2,2) -= trace/3.0;
     }
 
     // Transform to ECEF coordinates
@@ -338,9 +247,12 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
          st*sp, ct*sp,  cp,
          ct,    -st,    0;
     
-    // Transform gradient tensor
-    Eigen::Matrix3d G_ECEF = T.transpose() * G_spherical * T;
-    
+    // Transform gradient tensor (CORRECT: T * G_spherical * T^T for tensors)
+    Eigen::Matrix3d G_ECEF = T * G_total_spherical * T.transpose();
+
+    // Enforce symmetry numerically
+    G_ECEF = 0.5 * (G_ECEF + G_ECEF.transpose());
+
     // Already scaled to Eötvös units above
     return G_ECEF;
 }
@@ -369,15 +281,22 @@ GravityGradientTensor GravityGradientProvider::getGradient(const Eigen::Vector3d
 }
 
 double GravityGradientProvider::getAnomaly(const Eigen::Vector3d& pos_ECEF) const {
-    // Simplified - compute from gradient trace
+    // Compute anomaly as difference from normal vertical gradient
     auto gradient = getGradient(pos_ECEF);
-    
-    // Laplace equation: trace of gradient tensor = 0 in free space
-    // Anomaly is deviation from this
-    double anomaly_eotvos = gradient.T.trace();
-    
-    // Convert to mGal (1 mGal = 10 Eötvös for vertical gradient)
-    return anomaly_eotvos * 0.1;
+    const double r = pos_ECEF.norm();
+
+    // Normal vertical gradient at this radius (spherical Earth approximation)
+    // Tzz_normal = 2 * GM / r^3 in Eötvös
+    const double GM = 3.986004418e14;
+    const double Tzz_normal = 2.0 * GM / (r*r*r) * 1e9;  // Convert to Eötvös
+
+    // Anomaly is the difference between actual and normal
+    // In ECEF, z-component is approximately vertical near poles
+    double Tzz_actual = gradient.T(2,2);
+    double anomaly_eotvos = Tzz_actual - Tzz_normal;
+
+    // Convert to mGal (typical conversion factor)
+    return anomaly_eotvos * 0.001;  // More realistic conversion
 }
 
 void GravityGradientProvider::addEarthTides(GravityGradientTensor& gradient, double t) const {

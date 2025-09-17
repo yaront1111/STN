@@ -23,7 +23,7 @@ UKF::UKF(const UKFConfig& cfg) : cfg_(cfg) {
     
     // Initialize modular components
     sigma_points_manager_ = std::make_unique<UKFSigmaPoints>(*this);
-    measurements_manager_ = std::make_unique<UKFMeasurements>(*this);
+    measurements_manager_ = std::make_unique<UKFMeasurements>(*this, gravity_provider_);
     
     std::cout << "UKF initialized with modular architecture\n";
 }
@@ -54,6 +54,14 @@ void UKF::init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERR
     nominal_state_ = x0;
     P_ = P0;
     UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_);
+}
+
+void UKF::setGravityProvider(GravityGradientProvider* provider) {
+    gravity_provider_ = provider;
+    if (measurements_manager_) {
+        // Recreate measurements manager with new provider
+        measurements_manager_ = std::make_unique<UKFMeasurements>(*this, gravity_provider_);
+    }
 }
 
 void UKF::predict(const ImuSample& imu, double dt) {

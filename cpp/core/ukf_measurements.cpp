@@ -5,7 +5,8 @@
 #include "gravity_gradient_provider.h"
 #include <iostream>
 
-UKFMeasurements::UKFMeasurements(UKF& ukf) : ukf_(ukf) {
+UKFMeasurements::UKFMeasurements(UKF& ukf, GravityGradientProvider* gravity_provider)
+    : ukf_(ukf), gravity_provider_(gravity_provider) {
 }
 
 template<int MeasDim>
@@ -294,9 +295,23 @@ Eigen::Matrix3d UKFMeasurements::unflattenVector(const Eigen::VectorXd& vector) 
 }
 
 Eigen::Matrix3d UKFMeasurements::predictGravityGradient(const State& state) const {
-    // CRITICAL FIX: Use shared gravity provider to avoid repeated EGM2008 loading
-    static GravityGradientProvider provider;  // Static to avoid repeated initialization
-    auto result = provider.getGradient(state.p_ECEF);
+    // Use shared gravity provider passed from outside
+    if (!gravity_provider_) {
+        // Fallback to static instance if not provided (for backward compatibility)
+        static GravityGradientProvider static_provider;
+        static bool initialized = false;
+        if (!initialized) {
+            // Try to load EGM data
+            if (!static_provider.loadEGM2020("../data/egm2008/egm2008_n360_fixed.dat")) {
+                std::cerr << "Warning: Failed to load EGM2020 data for UKF predictions\n";
+            }
+            initialized = true;
+        }
+        auto result = static_provider.getGradient(state.p_ECEF);
+        return result.T;
+    }
+
+    auto result = gravity_provider_->getGradient(state.p_ECEF);
     return result.T;
 }
 

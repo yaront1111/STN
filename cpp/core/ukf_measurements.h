@@ -3,8 +3,9 @@
 #include <Eigen/Dense>
 #include <functional>
 
-// Forward declaration
+// Forward declarations
 class UKF;
+class GravityGradientProvider;
 
 /**
  * @brief UKF Measurement Update Handler
@@ -15,7 +16,7 @@ class UKF;
  */
 class UKFMeasurements {
 public:
-    explicit UKFMeasurements(UKF& ukf);
+    explicit UKFMeasurements(UKF& ukf, GravityGradientProvider* gravity_provider = nullptr);
     
     // Generic measurement update template
     template<int MeasDim>
@@ -53,6 +54,7 @@ public:
 
 private:
     UKF& ukf_;
+    GravityGradientProvider* gravity_provider_;  // Non-owning pointer
 
     // Internal measurement update with gate control
     template<int MeasDim>
