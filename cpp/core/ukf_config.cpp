@@ -86,18 +86,18 @@ void UKFConfig::setDefaults() {
 void UKFConfig::setGradeAOptimal() {
     // Start with defaults
     setDefaults();
-    
-    // Optimize for Grade A+ performance
+
+    // Optimize for Grade A performance with numerical stability
     alpha = 0.001;    // Small sigma point spread for stability
     beta = 2.0;       // Gaussian assumption
     kappa = 0.0;      // Standard setting
-    
-    // INCREASED process noise to prevent covariance collapse
-    process_noise.position = 10.0;     // Higher to maintain uncertainty
-    process_noise.velocity = 50.0;     // Much higher for velocity drift
-    process_noise.attitude = 0.5;      // Increased attitude uncertainty
-    process_noise.accel_bias = 0.05;   // Higher bias drift
-    process_noise.gyro_bias = 5e-3;    // Higher gyro drift
+
+    // Balanced process noise - avoid both collapse and explosion
+    process_noise.position = 0.01;     // 0.01 m/s^1.5 - moderate drift
+    process_noise.velocity = 0.1;      // 0.1 m/s^2.5 - realistic IMU
+    process_noise.attitude = 0.001;    // 0.001 rad/s^1.5 - tactical grade
+    process_noise.accel_bias = 1e-5;   // 1e-5 m/s^3.5 - slow drift
+    process_noise.gyro_bias = 1e-7;    // 1e-7 rad/s^2.5 - stable gyros
     
     // Calibrated measurement noise - FIXED for numerical stability
     // These values must be large enough to prevent singular covariance matrices
