@@ -92,12 +92,12 @@ void UKFConfig::setGradeAOptimal() {
     beta = 2.0;       // Gaussian assumption
     kappa = 0.0;      // Standard setting
     
-    // Balanced process noise for realistic IMU drift
-    process_noise.position = 5.0;      // Moderate position uncertainty
-    process_noise.velocity = 20.0;     // Account for IMU integration errors
-    process_noise.attitude = 0.1;      // Realistic attitude drift
-    process_noise.accel_bias = 0.01;   // Tactical-grade accelerometer bias drift
-    process_noise.gyro_bias = 1e-3;    // Tactical-grade gyro bias drift
+    // INCREASED process noise to prevent covariance collapse
+    process_noise.position = 10.0;     // Higher to maintain uncertainty
+    process_noise.velocity = 50.0;     // Much higher for velocity drift
+    process_noise.attitude = 0.5;      // Increased attitude uncertainty
+    process_noise.accel_bias = 0.05;   // Higher bias drift
+    process_noise.gyro_bias = 5e-3;    // Higher gyro drift
     
     // Calibrated measurement noise - FIXED for numerical stability
     // These values must be large enough to prevent singular covariance matrices

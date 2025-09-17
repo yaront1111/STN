@@ -315,11 +315,23 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
     V_pp *= final_scale;
     
     // Build gradient tensor in spherical coordinates
+    // NOTE: In spherical coordinates, the physical gradient components are:
+    // G_θθ = V_tt/r², G_φφ = V_pp/(r²sin²θ), G_rθ = V_rt/r, etc.
+    // We need to apply proper metric scaling
     Eigen::Matrix3d G_spherical;
-    G_spherical << V_rr, V_rt, V_rp,
-                   V_rt, V_tt, V_tp,
-                   V_rp, V_tp, V_pp;
-    
+    G_spherical << V_rr, V_rt/coords.r, V_rp/(coords.r*sin_theta),
+                   V_rt/coords.r, V_tt/(coords.r*coords.r), V_tp/(coords.r*coords.r*sin_theta),
+                   V_rp/(coords.r*sin_theta), V_tp/(coords.r*coords.r*sin_theta), V_pp/(coords.r*coords.r*sin_theta*sin_theta);
+
+    // Enforce Laplace equation (trace = 0 in free space)
+    double trace = G_spherical.trace();
+    if (std::abs(trace) > 0.1) {  // More than 0.1 Eötvös off
+        // Redistribute trace error equally among diagonal components
+        G_spherical(0,0) -= trace/3.0;
+        G_spherical(1,1) -= trace/3.0;
+        G_spherical(2,2) -= trace/3.0;
+    }
+
     // Transform to ECEF coordinates
     Eigen::Matrix3d T;
     double st = sin_theta;

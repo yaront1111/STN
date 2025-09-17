@@ -27,7 +27,6 @@ add_library(gravity_core STATIC
     cpp/core/ukf_sigma_points.cpp
     cpp/core/ukf_measurements.cpp
     cpp/core/ukf_math_utils.cpp
-    cpp/core/gravity_model.cpp
     cpp/core/gravity_gradient_provider.cpp
     cpp/core/gravity_map_matcher.cpp
     cpp/core/hierarchical_map_matcher.cpp
@@ -56,15 +55,6 @@ target_link_libraries(gravity_navigator
     gravity_core
 )
 
-# Grade A test executable
-add_executable(test_grade_a
-    test_grade_a.cpp
-)
-
-target_link_libraries(test_grade_a
-    gravity_core
-)
-
 # Gravity map matching test
 add_executable(test_gravity_map_match
     tests/test_gravity_map_match.cpp
@@ -80,6 +70,15 @@ add_executable(test_two_factor
 )
 
 target_link_libraries(test_two_factor
+    gravity_core
+)
+
+# Comprehensive system test
+add_executable(test_system_comprehensive
+    test_system_comprehensive.cpp
+)
+
+target_link_libraries(test_system_comprehensive
     gravity_core
 )
 

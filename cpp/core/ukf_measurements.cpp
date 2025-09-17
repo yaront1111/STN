@@ -157,13 +157,16 @@ void UKFMeasurements::updateMeasurementInternal(
     auto P = current_cov;
     if (use_joseph_form) {
         // Joseph form for numerical stability
-        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> I = 
+        // H approximated as S^-1 * T.transpose() (measurement Jacobian)
+        Eigen::Matrix<double, MeasDim, UKF_ERROR_STATE_DIM> H =
+            S.inverse() * T.transpose();
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> I =
             Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>::Identity();
-        auto IKH = I - K * T.transpose(); // Approximate H with T.transpose()
+        auto IKH = I - K * H;
         P = IKH * P * IKH.transpose() + K * noise_cov * K.transpose();
     } else {
-        // Standard Kalman update
-        P = P - K * S * K.transpose();
+        // Standard Kalman update - FIXED: Should be K*T' not K*S*K'
+        P = P - K * T.transpose();
     }
     
     // Ensure positive definiteness

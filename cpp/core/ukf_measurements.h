@@ -44,9 +44,12 @@ public:
     void updateTerrainAltitude(double radar_alt, double terrain_height, double noise);
     
     // Outlier detection and rejection
-    bool checkInnovation(const Eigen::VectorXd& innovation, 
-                        const Eigen::MatrixXd& S, 
+    bool checkInnovation(const Eigen::VectorXd& innovation,
+                        const Eigen::MatrixXd& S,
                         double chi_square_threshold = 9.21) const;  // 99% confidence, 3 DOF
+
+    // Gravity gradient prediction (made public for tensor invariants)
+    Eigen::Matrix3d predictGravityGradient(const State& state) const;
 
 private:
     UKF& ukf_;
@@ -72,7 +75,4 @@ private:
         const Eigen::MatrixXd& H,
         const Eigen::MatrixXd& R
     );
-    
-    // Gradient measurement model
-    Eigen::Matrix3d predictGravityGradient(const State& state) const;
 };

@@ -2,7 +2,6 @@
 #include "ukf_sigma_points.h"
 #include "ukf_measurements.h" 
 #include "ukf_math_utils.h"
-#include "normal_gravity.h"
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -88,17 +87,38 @@ void UKF::predict(const ImuSample& imu, double dt) {
 
 void UKF::addProcessNoise(double dt) {
     // Add process noise to covariance
-    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> Q = 
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> Q =
         Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Zero();
-    
-    Q.block<3,3>(POS_IDX, POS_IDX) = Eigen::Matrix3d::Identity() * cfg_.process_noise.position * cfg_.process_noise.position * dt * dt;
-    Q.block<3,3>(VEL_IDX, VEL_IDX) = Eigen::Matrix3d::Identity() * cfg_.process_noise.velocity * cfg_.process_noise.velocity * dt;
-    Q.block<3,3>(ATT_IDX, ATT_IDX) = Eigen::Matrix3d::Identity() * cfg_.process_noise.attitude * cfg_.process_noise.attitude * dt;
-    Q.block<3,3>(BA_IDX, BA_IDX) = Eigen::Matrix3d::Identity() * cfg_.process_noise.accel_bias * cfg_.process_noise.accel_bias * dt;
-    Q.block<3,3>(BG_IDX, BG_IDX) = Eigen::Matrix3d::Identity() * cfg_.process_noise.gyro_bias * cfg_.process_noise.gyro_bias * dt;
-    
+
+    // Adaptive noise scaling based on current uncertainty
+    double pos_uncertainty = std::sqrt(P_.block<3,3>(POS_IDX, POS_IDX).trace() / 3.0);
+    double vel_uncertainty = std::sqrt(P_.block<3,3>(VEL_IDX, VEL_IDX).trace() / 3.0);
+
+    // Scale process noise adaptively - increase when uncertainty is too low
+    double pos_scale = (pos_uncertainty < 10.0) ? 2.0 : 1.0;  // Boost if too certain
+    double vel_scale = (vel_uncertainty < 1.0) ? 2.0 : 1.0;
+
+    Q.block<3,3>(POS_IDX, POS_IDX) = Eigen::Matrix3d::Identity() *
+        cfg_.process_noise.position * cfg_.process_noise.position * dt * dt * pos_scale;
+    Q.block<3,3>(VEL_IDX, VEL_IDX) = Eigen::Matrix3d::Identity() *
+        cfg_.process_noise.velocity * cfg_.process_noise.velocity * dt * vel_scale;
+    Q.block<3,3>(ATT_IDX, ATT_IDX) = Eigen::Matrix3d::Identity() *
+        cfg_.process_noise.attitude * cfg_.process_noise.attitude * dt;
+    Q.block<3,3>(BA_IDX, BA_IDX) = Eigen::Matrix3d::Identity() *
+        cfg_.process_noise.accel_bias * cfg_.process_noise.accel_bias * dt;
+    Q.block<3,3>(BG_IDX, BG_IDX) = Eigen::Matrix3d::Identity() *
+        cfg_.process_noise.gyro_bias * cfg_.process_noise.gyro_bias * dt;
+
     P_ += Q;
-    
+
+    // Ensure minimum uncertainty to prevent collapse
+    double min_pos_var = 1.0;  // 1 m^2 minimum
+    double min_vel_var = 0.01; // 0.1 m/s minimum
+    for (int i = 0; i < 3; i++) {
+        P_(POS_IDX + i, POS_IDX + i) = std::max(P_(POS_IDX + i, POS_IDX + i), min_pos_var);
+        P_(VEL_IDX + i, VEL_IDX + i) = std::max(P_(VEL_IDX + i, VEL_IDX + i), min_vel_var);
+    }
+
     // Enforce positive definiteness
     UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_, cfg_.numerical.min_eigenvalue);
 }
@@ -155,15 +175,21 @@ void UKF::updateGradientInvariants(const Eigen::Matrix3d& measured_tensor, const
     // Compute rotationally-invariant features of the gravity gradient tensor
     // These are independent of attitude, making them much more robust
 
-    // For now, use simplified model that assumes invariants are zero at nominal
-    // In production, this would be passed the gravity model
-    auto invariants_model = [](const State& state) -> Eigen::Vector2d {
-        // Placeholder - in production this would compute expected invariants
-        // from the gravity model at state.p_ECEF
-        // For now, assume nominal values
-        Eigen::Vector2d expected;
-        expected << 0.0, 0.0;  // Will be updated with residual
-        return expected;
+    // Measurement model that computes expected invariants from gravity model
+    auto invariants_model = [this](const State& state) -> Eigen::Vector2d {
+        // Get predicted gravity gradient tensor at this position
+        // This uses the static gravity provider in UKFMeasurements
+        Eigen::Matrix3d predicted_tensor = measurements_manager_->predictGravityGradient(state);
+
+        // Compute invariants of predicted tensor
+        // I1 = trace (first invariant - sum of eigenvalues)
+        // I2 = 0.5 * (trace^2 - trace(T^2)) (second invariant)
+        double I1_pred = predicted_tensor.trace();
+        double I2_pred = 0.5 * (I1_pred * I1_pred - (predicted_tensor * predicted_tensor).trace());
+
+        Eigen::Vector2d expected_invariants;
+        expected_invariants << I1_pred, I2_pred;
+        return expected_invariants;
     };
 
     // Compute invariants of measured tensor
