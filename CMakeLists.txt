@@ -30,6 +30,7 @@ add_library(gravity_core STATIC
     cpp/core/gravity_model.cpp
     cpp/core/gravity_gradient_provider.cpp
     cpp/core/gravity_map_matcher.cpp
+    cpp/core/hierarchical_map_matcher.cpp
     cpp/core/config_reader.cpp
     cpp/core/terrain_correlator.cpp
     cpp/core/srtm_provider.cpp

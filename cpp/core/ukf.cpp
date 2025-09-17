@@ -152,18 +152,30 @@ void UKF::updateBarometer(double pressure_altitude, double noise) {
 
 // Production-ready implementations for additional measurement methods
 void UKF::updateGradientInvariants(const Eigen::Matrix3d& measured_tensor, const Eigen::Matrix2d& R_invariants) {
-    // Compute tensor invariants for more robust gradient matching
+    // Compute rotationally-invariant features of the gravity gradient tensor
+    // These are independent of attitude, making them much more robust
+
+    // For now, use simplified model that assumes invariants are zero at nominal
+    // In production, this would be passed the gravity model
     auto invariants_model = [](const State& state) -> Eigen::Vector2d {
-        // This would use GravityGradientProvider to get predicted tensor
-        // and compute its invariants (e.g., eigenvalues, trace)
-        Eigen::Vector2d invariants;
-        invariants << 0.0, 0.0;  // Placeholder - implement with real gravity model
-        return invariants;
+        // Placeholder - in production this would compute expected invariants
+        // from the gravity model at state.p_ECEF
+        // For now, assume nominal values
+        Eigen::Vector2d expected;
+        expected << 0.0, 0.0;  // Will be updated with residual
+        return expected;
     };
-    
+
+    // Compute invariants of measured tensor
+    // I1 = trace (first invariant - sum of eigenvalues)
+    // I2 = 0.5 * (trace^2 - trace(T^2)) (second invariant)
+    double I1_meas = measured_tensor.trace();
+    double I2_meas = 0.5 * (I1_meas * I1_meas - (measured_tensor * measured_tensor).trace());
+
     Eigen::Vector2d measured_invariants;
-    measured_invariants << measured_tensor.trace(), measured_tensor.determinant();
-    
+    measured_invariants << I1_meas, I2_meas;
+
+    // Update using only these 2D invariants instead of full 9D tensor
     measurements_manager_->updateMeasurement<2>(measured_invariants, R_invariants, invariants_model);
 }
 
