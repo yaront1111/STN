@@ -1,4 +1,5 @@
 #include "gravity_gradient_provider.h"
+#include "ukf_math_utils.h"  // For ecefToLla
 #include <fstream>
 #include <iostream>
 #include <cmath>
@@ -207,11 +208,14 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
     // Second derivatives need GM/r^3 base scaling
     double base_scale = GM / (coords.r * coords.r * coords.r);
 
+    // Guard against singularity at poles
+    const double st_guard = std::max(1e-12, std::abs(sin_theta));
+
     // Build anomalous gradient tensor in spherical coordinates with metric scaling
     Eigen::Matrix3d G_anomalous;
-    G_anomalous << V_rr, V_rt/coords.r, V_rp/(coords.r*sin_theta),
-                   V_rt/coords.r, V_tt/(coords.r*coords.r), V_tp/(coords.r*coords.r*sin_theta),
-                   V_rp/(coords.r*sin_theta), V_tp/(coords.r*coords.r*sin_theta), V_pp/(coords.r*coords.r*sin_theta*sin_theta);
+    G_anomalous << V_rr, V_rt/coords.r, V_rp/(coords.r*st_guard),
+                   V_rt/coords.r, V_tt/(coords.r*coords.r), V_tp/(coords.r*coords.r*st_guard),
+                   V_rp/(coords.r*st_guard), V_tp/(coords.r*coords.r*st_guard), V_pp/(coords.r*coords.r*st_guard*st_guard);
 
     // Scale anomalous part to Eötvös
     G_anomalous *= base_scale * 1e9;
@@ -281,22 +285,38 @@ GravityGradientTensor GravityGradientProvider::getGradient(const Eigen::Vector3d
 }
 
 double GravityGradientProvider::getAnomaly(const Eigen::Vector3d& pos_ECEF) const {
-    // Compute anomaly as difference from normal vertical gradient
-    auto gradient = getGradient(pos_ECEF);
+    // Get gradient in ECEF frame
+    const auto g = getGradient(pos_ECEF);
     const double r = pos_ECEF.norm();
 
-    // Normal vertical gradient at this radius (spherical Earth approximation)
-    // Tzz_normal = 2 * GM / r^3 in Eötvös
+    // Compute geodetic lat/lon from ECEF
+    const Eigen::Vector3d lla = UKFMathUtils::ecefToLla(pos_ECEF);
+    const double lat = lla(0);
+    const double lon = lla(1);
+
+    const double sLat = std::sin(lat), cLat = std::cos(lat);
+    const double sLon = std::sin(lon), cLon = std::cos(lon);
+
+    // Build rotation matrix from ECEF to ENU
+    // ENU basis from ECEF (rows are basis vectors)
+    Eigen::Matrix3d R;
+    R << -sLon,            cLon,             0,          // East
+         -sLat*cLon,      -sLat*sLon,       cLat,        // North
+          cLat*cLon,       cLat*sLon,       sLat;        // Up
+
+    // Rotate gradient tensor to ENU frame
+    const Eigen::Matrix3d G_ENU = R * g.T * R.transpose();
+
+    // Normal vertical gradient (Up/Up component) in Eötvös
     const double GM = 3.986004418e14;
-    const double Tzz_normal = 2.0 * GM / (r*r*r) * 1e9;  // Convert to Eötvös
+    // Note: Up points outward, so Tuu_normal = -2GM/r^3 (negative of radial)
+    const double Tuu_normal = -2.0 * GM / (r*r*r) * 1e9;
 
-    // Anomaly is the difference between actual and normal
-    // In ECEF, z-component is approximately vertical near poles
-    double Tzz_actual = gradient.T(2,2);
-    double anomaly_eotvos = Tzz_actual - Tzz_normal;
+    const double Tuu_actual = G_ENU(2,2);  // ENU: [E,N,U]; index 2 is Up
+    const double delta_Tuu_E = Tuu_actual - Tuu_normal;
 
-    // Convert to mGal (typical conversion factor)
-    return anomaly_eotvos * 0.001;  // More realistic conversion
+    // Return anomaly in Eötvös (the native unit for gradients)
+    return delta_Tuu_E;
 }
 
 void GravityGradientProvider::addEarthTides(GravityGradientTensor& gradient, double t) const {

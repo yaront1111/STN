@@ -21,9 +21,9 @@ UKF::UKF(const UKFConfig& cfg) : cfg_(cfg) {
     integrity_stats_.nees_pass_rate = 1.0;
     integrity_stats_.nis_pass_rate = 1.0;
     
-    // Initialize modular components
+    // Initialize sigma points manager immediately
     sigma_points_manager_ = std::make_unique<UKFSigmaPoints>(*this);
-    measurements_manager_ = std::make_unique<UKFMeasurements>(*this, gravity_provider_);
+    // Defer measurements manager until gravity provider is set
     
     std::cout << "UKF initialized with modular architecture\n";
 }
@@ -58,10 +58,8 @@ void UKF::init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERR
 
 void UKF::setGravityProvider(GravityGradientProvider* provider) {
     gravity_provider_ = provider;
-    if (measurements_manager_) {
-        // Recreate measurements manager with new provider
-        measurements_manager_ = std::make_unique<UKFMeasurements>(*this, gravity_provider_);
-    }
+    // Create measurements manager now that we have the provider
+    measurements_manager_ = std::make_unique<UKFMeasurements>(*this, gravity_provider_);
 }
 
 void UKF::predict(const ImuSample& imu, double dt) {
@@ -138,6 +136,7 @@ void UKF::enforcePositiveDefinite(Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_S
 
 void UKF::updateGradient(const Eigen::Matrix3d& measured, const Eigen::Matrix3d& R) {
     // Use the modular measurements manager for gradient updates
+    assert(measurements_manager_ && "setGravityProvider() must be called before gradient updates");
     measurements_manager_->updateGravityGradient(measured, R);
 }
 
@@ -189,27 +188,24 @@ void UKF::updateGradientInvariants(const Eigen::Matrix3d& measured_tensor, const
         // This uses the static gravity provider in UKFMeasurements
         Eigen::Matrix3d predicted_tensor = measurements_manager_->predictGravityGradient(state);
 
-        // Compute invariants of predicted tensor
-        // I1 = trace (first invariant - sum of eigenvalues)
-        // I2 = 0.5 * (trace^2 - trace(T^2)) (second invariant)
-        double I1_pred = predicted_tensor.trace();
-        double I2_pred = 0.5 * (I1_pred * I1_pred - (predicted_tensor * predicted_tensor).trace());
+        // Compute invariants of predicted tensor using J2 and J3
+        const double J2_pred = 0.5 * (predicted_tensor * predicted_tensor).trace();
+        const double J3_pred = predicted_tensor.determinant();
 
         Eigen::Vector2d expected_invariants;
-        expected_invariants << I1_pred, I2_pred;
+        expected_invariants << J2_pred, J3_pred;
         return expected_invariants;
     };
 
-    // Compute invariants of measured tensor
-    // I1 = trace (first invariant - sum of eigenvalues)
-    // I2 = 0.5 * (trace^2 - trace(T^2)) (second invariant)
-    double I1_meas = measured_tensor.trace();
-    double I2_meas = 0.5 * (I1_meas * I1_meas - (measured_tensor * measured_tensor).trace());
+    // Compute invariants of measured tensor using J2 and J3
+    const double J2_meas = 0.5 * (measured_tensor * measured_tensor).trace();
+    const double J3_meas = measured_tensor.determinant();
 
     Eigen::Vector2d measured_invariants;
-    measured_invariants << I1_meas, I2_meas;
+    measured_invariants << J2_meas, J3_meas;
 
     // Update using only these 2D invariants instead of full 9D tensor
+    assert(measurements_manager_ && "setGravityProvider() must be called before gradient updates");
     measurements_manager_->updateMeasurement<2>(measured_invariants, R_invariants, invariants_model);
 }
 

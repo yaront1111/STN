@@ -36,7 +36,7 @@ public:
     /**
      * Get gravity anomaly at position
      * @param pos_ECEF Position in ECEF coordinates (meters)
-     * @return Gravity anomaly in mGal
+     * @return Gravity anomaly in Eötvös (vertical gradient deviation from normal)
      */
     double getAnomaly(const Eigen::Vector3d& pos_ECEF) const;
     
