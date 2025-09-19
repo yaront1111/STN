@@ -132,9 +132,13 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
     const double a = 6378137.0;  // WGS84 semi-major axis
     const double GM = 3.986004418e14;  // Gravitational constant * Earth mass
     
-    // Initialize second derivative components in spherical coordinates
+    // Initialize second derivative components with Kahan summation
+    // Main sums
     double V_rr = 0.0, V_rt = 0.0, V_rp = 0.0;
     double V_tt = 0.0, V_tp = 0.0, V_pp = 0.0;
+    // Compensation terms for Kahan summation
+    double c_rr = 0.0, c_rt = 0.0, c_rp = 0.0;
+    double c_tt = 0.0, c_tp = 0.0, c_pp = 0.0;
     
     // Precompute longitude terms
     std::vector<double> cos_m_lon(max_safe_degree + 1);
@@ -152,10 +156,14 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
     
     double cos_theta = std::cos(coords.theta);
     double sin_theta = std::sin(coords.theta);
-    
+
+    // Compute log of radial ratio for numerical stability
+    double log_ar = std::log(a / coords.r);
+
     // Sum spherical harmonic series for second derivatives only
     for (int n = 2; n <= max_safe_degree; ++n) {
-        double ar_pow = std::pow(a / coords.r, n);
+        // Use exp(n*log) for stable computation of powers
+        double ar_pow = std::exp(n * log_ar);
 
         for (int m = 0; m <= n; ++m) {
             int idx = coeffs_->idx(n, m);
@@ -190,18 +198,19 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
                           << " CS_sum=" << CS_sum << "\n";
             }
 
-            // V_rr = (n+1)(n+2) term
+            // V_rr = (n+1)(n+2) term with Kahan summation
             double v_rr_contrib = (n + 1) * (n + 2) * common_factor * CS_sum;
-            V_rr += v_rr_contrib;
+            double y = v_rr_contrib - c_rr;
+            double t = V_rr + y;
+            c_rr = (t - V_rr) - y;
+            V_rr = t;
 
-            // DEBUG: Check for large contributions
-            if (debug && std::abs(v_rr_contrib) > 1e10) {
-                std::cout << "[DEBUG] Large V_rr contribution at n=" << n << ", m=" << m
-                          << ": " << v_rr_contrib << "\n";
-            }
-            
-            // V_rt = (n+1) * dP/dtheta term
-            V_rt += (n + 1) * ar_pow * legendre.dP(n, m) * CS_sum;
+            // V_rt = (n+1) * dP/dtheta term with Kahan summation
+            double v_rt_contrib = (n + 1) * ar_pow * legendre.dP(n, m) * CS_sum;
+            y = v_rt_contrib - c_rt;
+            t = V_rt + y;
+            c_rt = (t - V_rt) - y;
+            V_rt = t;
             
             // V_tt = second theta derivative (correct formula)
             // V_tt = ar^n * [(m^2/sin^2(θ) - n(n+1))P_nm - (cos(θ)/sin(θ))dP_nm] * CS_sum

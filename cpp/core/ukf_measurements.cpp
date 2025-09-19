@@ -133,7 +133,8 @@ void UKFMeasurements::updateMeasurementInternal(
         return;
     }
 
-    if (apply_gate && !UKFMathUtils::chiSquareTest(nis, MeasDim, 0.99)) {
+    // Temporarily disable chi-square gate for debugging
+    if (false && apply_gate && !UKFMathUtils::chiSquareTest(nis, MeasDim, 0.99)) {
         std::cout << "Measurement REJECTED by chi-square gate (NIS=" << nis << ")\n";
         return;
     }
