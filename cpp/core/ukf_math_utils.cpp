@@ -324,47 +324,98 @@ template<>
 void UKFMathUtils::cholupdate<15>(Eigen::Matrix<double, 15, 15>& S,
                                  const Eigen::Matrix<double, 15, 1>& v,
                                  double alpha) {
-    // Rank-1 Cholesky update/downdate using Givens rotations
-    // Based on Golub & Van Loan algorithm
+    // Robust rank-1 Cholesky update/downdate using Givens rotations
+    // Based on Golub & Van Loan with numerical safeguards
 
+    const double EPSILON = 1e-10;  // Numerical tolerance
     Eigen::Matrix<double, 15, 1> x = v;
 
+    if (std::abs(alpha) < EPSILON) {
+        return;  // Nothing to update
+    }
+
     if (alpha > 0) {
-        // Update: S_new*S_new' = S*S' + v*v'
+        // Update: S_new*S_new' = S*S' + alpha*v*v'
         for (int k = 0; k < 15; k++) {
-            double r = std::hypot(S(k,k), x(k));
-            double c = S(k,k) / r;
-            double s = x(k) / r;
+            double skk = S(k,k);
+            double xk = x(k) * std::sqrt(alpha);  // Scale by sqrt(alpha)
+
+            // Compute new diagonal element using hypot for numerical stability
+            double r = std::hypot(skk, xk);
+
+            // Avoid division by zero
+            if (r < EPSILON) {
+                S(k,k) = EPSILON;
+                continue;
+            }
+
+            double c = skk / r;
+            double s = xk / r;
             S(k,k) = r;
 
+            // Update the rest of row k
             if (k < 14) {
-                // Update the rest of row k
                 for (int j = k+1; j < 15; j++) {
-                    S(j,k) = (S(j,k) + s * x(j)) / c;
-                    x(j) = c * x(j) - s * S(j,k);
+                    double sjk = S(j,k);
+                    double xj = x(j);
+                    S(j,k) = c * sjk + s * xj;
+                    x(j) = c * xj - s * sjk;
                 }
             }
         }
     } else {
-        // Downdate: S_new*S_new' = S*S' - v*v'
-        // More numerically sensitive, need to check for negative result
-        for (int k = 0; k < 15; k++) {
-            double r_sq = S(k,k) * S(k,k) - x(k) * x(k);
-            if (r_sq <= 0) {
-                std::cerr << "WARNING: Cholesky downdate would result in non-PD matrix\n";
-                return;  // Don't update if it would break positive definiteness
-            }
-            double r = std::sqrt(r_sq);
-            double c = r / S(k,k);
-            double s = x(k) / S(k,k);
-            S(k,k) = r;
+        // Downdate: S_new*S_new' = S*S' - |alpha|*v*v'
+        // More numerically sensitive - use hyperbolic rotations
 
-            if (k < 14) {
-                for (int j = k+1; j < 15; j++) {
-                    S(j,k) = (S(j,k) - s * x(j)) / c;
-                    x(j) = c * x(j) - s * S(j,k);
+        double abs_alpha = std::abs(alpha);
+
+        for (int k = 0; k < 15; k++) {
+            double skk = S(k,k);
+            double xk = x(k) * std::sqrt(abs_alpha);
+
+            // Check if downdate would make matrix non-PD
+            double r_sq = skk * skk - xk * xk;
+
+            if (r_sq <= EPSILON * EPSILON) {
+                // Would result in non-positive definite matrix
+                // Apply minimal correction to maintain PD
+                S(k,k) = std::max(S(k,k), EPSILON);
+
+                // Zero out the update vector to prevent further damage
+                for (int j = k; j < 15; j++) {
+                    x(j) = 0;
                 }
+                continue;
             }
+
+            double r = std::sqrt(r_sq);
+
+            // Hyperbolic rotations for downdate
+            if (std::abs(skk) > EPSILON) {
+                double c = r / skk;
+                double s = xk / skk;
+
+                S(k,k) = r;
+
+                // Update the rest of row k
+                if (k < 14) {
+                    for (int j = k+1; j < 15; j++) {
+                        double sjk = S(j,k);
+                        double xj = x(j);
+                        S(j,k) = c * sjk - s * xj;
+                        x(j) = c * xj - s * sjk;
+                    }
+                }
+            } else {
+                S(k,k) = EPSILON;
+            }
+        }
+    }
+
+    // Ensure diagonal elements remain positive
+    for (int i = 0; i < 15; i++) {
+        if (S(i,i) < EPSILON) {
+            S(i,i) = EPSILON;
         }
     }
 }

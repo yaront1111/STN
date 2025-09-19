@@ -189,62 +189,91 @@ void UKF::addProcessNoise(double dt) {
 }
 
 void UKF::addProcessNoiseSquareRoot(double dt) {
-    // For now, use the simpler (less efficient) approach: convert to P, add Q, convert back
-    // This is more robust than the QR approach which seems to have numerical issues
+    // Proper square-root process noise addition using QR decomposition
+    // S_new = qr([S; sqrt(Q)]) where Q is the process noise covariance
 
-    // Reconstruct P from S
-    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P = S_ * S_.transpose();
+    // Create diagonal process noise standard deviations
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> q_std =
+        Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
 
-    // Create process noise covariance
-    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> Q =
-        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Zero();
-
-    // Get current uncertainty estimates
-    double pos_var = P.block<3,3>(POS_IDX, POS_IDX).trace() / 3.0;
-    double vel_var = P.block<3,3>(VEL_IDX, VEL_IDX).trace() / 3.0;
-
-    // Adaptive scaling
-    double pos_scale = (std::sqrt(pos_var) < 10.0) ? 2.0 : 1.0;
-    double vel_scale = (std::sqrt(vel_var) < 1.0) ? 2.0 : 1.0;
-
-    Q.block<3,3>(POS_IDX, POS_IDX) = Eigen::Matrix3d::Identity() *
-        cfg_.process_noise.position * cfg_.process_noise.position * dt * dt * pos_scale;
-    Q.block<3,3>(VEL_IDX, VEL_IDX) = Eigen::Matrix3d::Identity() *
-        cfg_.process_noise.velocity * cfg_.process_noise.velocity * dt * vel_scale;
-    Q.block<3,3>(ATT_IDX, ATT_IDX) = Eigen::Matrix3d::Identity() *
-        cfg_.process_noise.attitude * cfg_.process_noise.attitude * dt;
-    Q.block<3,3>(BA_IDX, BA_IDX) = Eigen::Matrix3d::Identity() *
-        cfg_.process_noise.accel_bias * cfg_.process_noise.accel_bias * dt;
-    Q.block<3,3>(BG_IDX, BG_IDX) = Eigen::Matrix3d::Identity() *
-        cfg_.process_noise.gyro_bias * cfg_.process_noise.gyro_bias * dt;
-
-    // Add process noise
-    P += Q;
-
-    // Ensure minimum uncertainty to prevent collapse
-    double min_pos_var = 1.0;   // 1 m^2 minimum
-    double min_vel_var = 0.01;  // 0.01 m^2/s^2 minimum
+    // Get current uncertainty for adaptive scaling (from diagonal of S*S')
+    double pos_std = 0, vel_std = 0;
     for (int i = 0; i < 3; i++) {
-        P(POS_IDX + i, POS_IDX + i) = std::max(P(POS_IDX + i, POS_IDX + i), min_pos_var);
-        P(VEL_IDX + i, VEL_IDX + i) = std::max(P(VEL_IDX + i, VEL_IDX + i), min_vel_var);
+        pos_std += S_.row(POS_IDX + i).squaredNorm();
+        vel_std += S_.row(VEL_IDX + i).squaredNorm();
+    }
+    pos_std = std::sqrt(pos_std / 3.0);
+    vel_std = std::sqrt(vel_std / 3.0);
+
+    // Adaptive scaling - increase process noise when uncertainty is low
+    double pos_scale = (pos_std < 10.0) ? 2.0 : 1.0;
+    double vel_scale = (vel_std < 1.0) ? 2.0 : 1.0;
+
+    // Set process noise standard deviations
+    double dt_sqrt = std::sqrt(dt);
+    for (int i = 0; i < 3; i++) {
+        q_std(POS_IDX + i) = cfg_.process_noise.position * dt * pos_scale;
+        q_std(VEL_IDX + i) = cfg_.process_noise.velocity * dt_sqrt * vel_scale;
+        q_std(ATT_IDX + i) = cfg_.process_noise.attitude * dt_sqrt;
+        q_std(BA_IDX + i) = cfg_.process_noise.accel_bias * dt_sqrt;
+        q_std(BG_IDX + i) = cfg_.process_noise.gyro_bias * dt_sqrt;
     }
 
-    // Ensure positive definiteness
-    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P, cfg_.numerical.min_eigenvalue);
+    // Method 1: Sequential rank-1 updates (more stable than QR for diagonal Q)
+    // For each non-zero process noise element, perform a rank-1 update
+    for (int i = 0; i < ERROR_STATE_DIM; i++) {
+        if (q_std(i) > 1e-12) {  // Only update if significant
+            Eigen::Matrix<double, ERROR_STATE_DIM, 1> ei =
+                Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
+            ei(i) = q_std(i);
 
-    // Convert back to Cholesky factor
-    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P);
-    if (llt.info() == Eigen::Success) {
-        S_ = llt.matrixL();
-    } else {
-        std::cerr << "ERROR: Failed to compute Cholesky factor after adding process noise!\n";
-        // Reset to safe diagonal
-        S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
-        S_.block<3,3>(0,0) *= 1.0;     // Position
-        S_.block<3,3>(3,3) *= 0.316;   // Velocity
-        S_.block<3,3>(6,6) *= 0.1;     // Attitude
-        S_.block<3,3>(9,9) *= 0.0316;  // Accel bias
-        S_.block<3,3>(12,12) *= 0.01;  // Gyro bias
+            // Rank-1 update: S_new*S_new' = S*S' + ei*ei'
+            UKFMathUtils::cholupdate<ERROR_STATE_DIM>(S_, ei, 1.0);
+        }
+    }
+
+    // Ensure minimum uncertainty on diagonal to prevent collapse
+    double min_pos_std = 1.0;    // 1 m minimum
+    double min_vel_std = 0.1;    // 0.1 m/s minimum
+    double min_att_std = 0.001;  // 0.001 rad minimum
+    double min_ba_std = 1e-4;    // Small bias minimums
+    double min_bg_std = 1e-5;
+
+    for (int i = 0; i < 3; i++) {
+        if (S_(POS_IDX + i, POS_IDX + i) < min_pos_std) {
+            S_(POS_IDX + i, POS_IDX + i) = min_pos_std;
+        }
+        if (S_(VEL_IDX + i, VEL_IDX + i) < min_vel_std) {
+            S_(VEL_IDX + i, VEL_IDX + i) = min_vel_std;
+        }
+        if (S_(ATT_IDX + i, ATT_IDX + i) < min_att_std) {
+            S_(ATT_IDX + i, ATT_IDX + i) = min_att_std;
+        }
+        if (S_(BA_IDX + i, BA_IDX + i) < min_ba_std) {
+            S_(BA_IDX + i, BA_IDX + i) = min_ba_std;
+        }
+        if (S_(BG_IDX + i, BG_IDX + i) < min_bg_std) {
+            S_(BG_IDX + i, BG_IDX + i) = min_bg_std;
+        }
+    }
+
+    // Periodically re-triangularize to maintain numerical properties
+    static int noise_add_count = 0;
+    if (++noise_add_count % 100 == 0) {
+        // Every 100 updates, ensure S is properly triangular
+        // by reconstructing from P = S*S'
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P = S_ * S_.transpose();
+
+        // Small regularization to maintain conditioning
+        for (int i = 0; i < ERROR_STATE_DIM; i++) {
+            P(i,i) += 1e-9;
+        }
+
+        // Recompute Cholesky factor
+        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P);
+        if (llt.info() == Eigen::Success) {
+            S_ = llt.matrixL();
+        }
     }
 }
 

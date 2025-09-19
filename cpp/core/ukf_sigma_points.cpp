@@ -220,57 +220,72 @@ Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>
 UKFSigmaPoints::computeCholeskyFactor(const std::vector<State>& states,
                                      const State& mean_state,
                                      const Eigen::VectorXd& weights_cov) {
-    // Build the matrix A where columns are weighted deviations
-    // A = [sqrt(w_1)*(X_1-x_mean), ..., sqrt(w_2n)*(X_2n-x_mean)]
-
-    // Note: weights_cov(0) is typically negative for the central point
-    // We need to handle this carefully
+    // Proper square-root UKF formulation
+    // Build matrix with ALL sigma points, handling negative weight correctly
 
     int num_sigma = states.size();
+
+    // First, handle the central point separately
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error0 =
+        UKFMathUtils::computeErrorVector(states[0], mean_state);
+
+    // For UKF, w_0^c is typically negative, but we need special handling
+    double w0 = weights_cov(0);
+
+    // Build the matrix of weighted deviations for positive weights
+    // We'll process all points with positive weights first
     Eigen::Matrix<double, UKF_ERROR_STATE_DIM, Eigen::Dynamic> A(UKF_ERROR_STATE_DIM, num_sigma - 1);
 
-    int col = 0;
-    for (size_t i = 1; i < states.size(); ++i) {  // Skip central point (i=0) since its weight is negative
+    for (int i = 1; i < num_sigma; ++i) {
         Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error =
             UKFMathUtils::computeErrorVector(states[i], mean_state);
 
-        // Square root of weight (should be positive for i > 0)
+        // All non-central weights should be positive
         double sqrt_weight = std::sqrt(std::abs(weights_cov(i)));
-        A.col(col) = sqrt_weight * error;
-        col++;
+        A.col(i-1) = sqrt_weight * error;
     }
 
-    // Perform QR decomposition
+    // Perform QR decomposition on positive weight contributions
     Eigen::HouseholderQR<Eigen::Matrix<double, UKF_ERROR_STATE_DIM, Eigen::Dynamic>> qr(A);
+
+    // Extract R matrix (upper triangular)
     Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> R =
-        qr.matrixQR().triangularView<Eigen::Upper>()
-            .toDenseMatrix()
-            .block(0, 0, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM);
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>::Zero();
 
-    // Handle the central sigma point's negative weight contribution
-    // This requires a rank-1 downdate
-    if (weights_cov(0) < 0) {
-        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error0 =
-            UKFMathUtils::computeErrorVector(states[0], mean_state);
-        double sqrt_abs_weight0 = std::sqrt(std::abs(weights_cov(0)));
-
-        // We need to perform a rank-1 downdate: S_new = chol(R'*R - v*v')
-        // For now, compute full covariance and recholesky (TODO: implement efficient choldowndate)
-        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> P = R.transpose() * R;
-        P -= (sqrt_abs_weight0 * error0) * (sqrt_abs_weight0 * error0).transpose();
-
-        // Ensure positive definiteness
-        UKFMathUtils::enforcePositiveDefinite<UKF_ERROR_STATE_DIM>(P, 1e-12);
-
-        // Compute Cholesky of updated covariance
-        Eigen::LLT<Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>> llt(P);
-        if (llt.info() == Eigen::Success) {
-            return llt.matrixL();
-        } else {
-            std::cerr << "WARNING: Cholesky failed in computeCholeskyFactor, returning R\n";
-            return R.transpose();  // Return transpose since we want lower triangular
-        }
+    // Only extract the square part that exists
+    int rank = std::min((int)A.cols(), (int)UKF_ERROR_STATE_DIM);
+    if (rank > 0) {
+        R.topLeftCorner(rank, rank) = qr.matrixQR()
+            .topLeftCorner(rank, rank)
+            .triangularView<Eigen::Upper>();
     }
 
-    return R.transpose();  // Return lower triangular
+    // Now handle the central point with negative weight
+    if (w0 < 0) {
+        // This is a rank-1 downdate: S_new*S_new' = R'*R - |w0|*(x0-xbar)*(x0-xbar)'
+        double sqrt_abs_w0 = std::sqrt(std::abs(w0));
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> v = sqrt_abs_w0 * error0;
+
+        // Use cholupdate with negative alpha for downdate
+        // First convert R to lower triangular
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> S = R.transpose();
+
+        // Perform rank-1 downdate
+        UKFMathUtils::cholupdate<UKF_ERROR_STATE_DIM>(S, v, -1.0);
+
+        return S;  // Already lower triangular
+    } else if (w0 > 0) {
+        // This shouldn't happen in standard UKF, but handle it
+        // This would be a rank-1 update
+        double sqrt_w0 = std::sqrt(w0);
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> v = sqrt_w0 * error0;
+
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> S = R.transpose();
+        UKFMathUtils::cholupdate<UKF_ERROR_STATE_DIM>(S, v, 1.0);
+
+        return S;
+    }
+
+    // If w0 == 0, just return the transposed R
+    return R.transpose();  // Convert to lower triangular
 }
