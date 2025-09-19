@@ -295,11 +295,11 @@ void UKF::addProcessNoiseSquareRoot(double dt) {
     double min_bg_std_real = 1e-5;
 
     // Convert to scaled space
-    double min_pos_std = min_pos_std_real / UKFStateScaler::POSITION_SCALE;
-    double min_vel_std = min_vel_std_real / UKFStateScaler::VELOCITY_SCALE;
-    double min_att_std = min_att_std_real / UKFStateScaler::ATTITUDE_SCALE;
-    double min_ba_std = min_ba_std_real / UKFStateScaler::ACCEL_BIAS_SCALE;
-    double min_bg_std = min_bg_std_real / UKFStateScaler::GYRO_BIAS_SCALE;
+    double min_pos_std = min_pos_std_real / UKFStateScalerV2::SIGMA_POSITION;
+    double min_vel_std = min_vel_std_real / UKFStateScalerV2::SIGMA_VELOCITY;
+    double min_att_std = min_att_std_real / UKFStateScalerV2::SIGMA_ATTITUDE;
+    double min_ba_std = min_ba_std_real / UKFStateScalerV2::SIGMA_ACCEL_BIAS;
+    double min_bg_std = min_bg_std_real / UKFStateScalerV2::SIGMA_GYRO_BIAS;
 
     for (int i = 0; i < 3; i++) {
         if (S_scaled_(POS_IDX + i, POS_IDX + i) < min_pos_std) {

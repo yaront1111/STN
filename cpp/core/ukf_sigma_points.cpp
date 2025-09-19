@@ -32,7 +32,7 @@ void UKFSigmaPoints::generate(const State& nominal_state,
 
         // CRITICAL: Unscale the offset to real-world units before applying to state
         Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> offset_real =
-            scaler.fromScaledSpace(offset_scaled);
+            scaler.unscaleError(offset_scaled);
 
         // Apply error to nominal state using real-world offset
         State pos_state = UKFMathUtils::applyErrorToState(nominal_state, offset_real);
@@ -242,7 +242,7 @@ UKFSigmaPoints::computeCholeskyFactor(const std::vector<State>& states,
 
     // CRITICAL: Scale the error to scaled space
     Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error0_scaled =
-        scaler.toScaledSpace(error0_real);
+        scaler.scaleError(error0_real);
 
     // For UKF, w_0^c is typically negative, but we need special handling
     double w0 = weights_cov(0);
@@ -257,7 +257,7 @@ UKFSigmaPoints::computeCholeskyFactor(const std::vector<State>& states,
 
         // CRITICAL: Scale to scaled space
         Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error_scaled =
-            scaler.toScaledSpace(error_real);
+            scaler.scaleError(error_real);
 
         // All non-central weights should be positive
         double sqrt_weight = std::sqrt(std::abs(weights_cov(i)));

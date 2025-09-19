@@ -3,7 +3,7 @@
 #include "integrity.hpp"
 #include "ukf_config.h"
 #include "ukf_math_utils.h"
-#include "ukf_state_scaler.h"
+#include "ukf_state_scaler_v2.h"
 #include <Eigen/Dense>
 #include <vector>
 #include <iostream>
@@ -147,8 +147,8 @@ public:
     }
 
     // Get state scaler (for access from sigma points and measurements)
-    const UKFStateScaler& getStateScaler() const { return state_scaler_; }
-    UKFStateScaler& getStateScaler() { return state_scaler_; }
+    const UKFStateScalerV2& getStateScaler() const { return state_scaler_; }
+    UKFStateScalerV2& getStateScaler() { return state_scaler_; }
 
     // Getters for modular components
     const Eigen::VectorXd& getWeightsMean() const { return weights_mean_; }
@@ -194,7 +194,7 @@ protected:
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> S_scaled_;
 
     // State scaler for numerical stability
-    UKFStateScaler state_scaler_;
+    UKFStateScalerV2 state_scaler_;
 
     // UKF configuration and parameters
     UKFConfig cfg_;

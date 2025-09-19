@@ -64,6 +64,11 @@ public:
     void updateAnomaly(double measured_anomaly_mgal, double noise_mgal);
 
     /**
+     * Update with map match position fix
+     */
+    void updateMapMatch(const Eigen::Vector3d& matched_position_ECEF, double uncertainty_m);
+
+    /**
      * Get current state estimate (physical units)
      */
     State getState() const { return nominal_state_; }

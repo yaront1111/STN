@@ -84,6 +84,24 @@ target_link_libraries(test_system_comprehensive
     gravity_core
 )
 
+# GPS-denied navigation test with ScaledUKF
+add_executable(test_scaled_ukf_gps_denied
+    test_scaled_ukf_gps_denied.cpp
+)
+
+target_link_libraries(test_scaled_ukf_gps_denied
+    gravity_core
+)
+
+# Simple GPS-denied demonstration
+add_executable(test_gps_denied_simple
+    test_gps_denied_simple.cpp
+)
+
+target_link_libraries(test_gps_denied_simple
+    gravity_core
+)
+
 
 # Installation
 install(TARGETS gravity_navigator
