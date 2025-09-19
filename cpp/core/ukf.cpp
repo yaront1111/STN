@@ -22,8 +22,8 @@ UKF::UKF(const UKFConfig& cfg) : cfg_(cfg) {
     integrity_stats_.nees_pass_rate = 1.0;
     integrity_stats_.nis_pass_rate = 1.0;
     
-    // Initialize sigma points manager immediately
-    sigma_points_manager_ = std::make_unique<UKFSigmaPoints>(*this);
+    // Initialize sigma points manager (gravity provider will be set later)
+    sigma_points_manager_ = std::make_unique<UKFSigmaPoints>(*this, nullptr);
     // Defer measurements manager until gravity provider is set
     
     std::cout << "UKF initialized with modular architecture\n";
@@ -97,6 +97,12 @@ void UKF::init(const State& x0_ECEF, const Eigen::Matrix<double, ERROR_STATE_DIM
 
 void UKF::setGravityProvider(GravityGradientProvider* provider) {
     gravity_provider_ = provider;
+
+    // Update sigma points manager with gravity provider for physics-correct propagation
+    if (sigma_points_manager_) {
+        sigma_points_manager_ = std::make_unique<UKFSigmaPoints>(*this, gravity_provider_);
+    }
+
     // Create measurements manager now that we have the provider
     measurements_manager_ = std::make_unique<UKFMeasurements>(*this, gravity_provider_);
 }
@@ -127,6 +133,14 @@ void UKF::predict(const ImuSample& imu, double dt) {
 
     // Add process noise
     addProcessNoise(dt);
+
+    // Add covariance floor to prevent overconfidence
+    const double min_variance = 1e-12;  // Minimum variance on diagonal
+    for (int i = 0; i < ERROR_STATE_DIM; i++) {
+        if (P_(i,i) < min_variance) {
+            P_(i,i) = min_variance;
+        }
+    }
 
     // Final check and fix
     if (!UKFMathUtils::checkMatrixValidity<ERROR_STATE_DIM>(P_)) {

@@ -1,9 +1,11 @@
 #include "ukf_sigma_points.h"
 #include "ukf.h"
 #include "ukf_math_utils.h"
+#include "gravity_gradient_provider.h"
 #include <iostream>
 
-UKFSigmaPoints::UKFSigmaPoints(UKF& ukf) : ukf_(ukf) {
+UKFSigmaPoints::UKFSigmaPoints(UKF& ukf, GravityGradientProvider* gravity_provider)
+    : ukf_(ukf), gravity_provider_(gravity_provider) {
     sigma_points_.resize(UKF_NUM_SIGMA_POINTS);
 }
 
@@ -61,27 +63,14 @@ std::vector<State> UKFSigmaPoints::propagateStates(const ImuSample& imu, double 
     std::vector<State> propagated_states;
     propagated_states.reserve(sigma_points_.size());
 
+    // Earth's rotation vector in ECEF frame (rad/s)
+    const Eigen::Vector3d omega_ie(0.0, 0.0, 7.292115e-5);
+
     for (const auto& sigma_point : sigma_points_) {
-        // Use direct integration
         State propagated = sigma_point.state;
 
-        // Position integration
-        propagated.p_ECEF += propagated.v_ECEF * dt;
-
-        // Velocity integration with gravity
-        // In ENU frame, gravity is [0, 0, -9.81] m/s²
-        Eigen::Vector3d gravity_ENU(0, 0, -9.81);
-
-        // Check if we're in ENU mode
-        if (ukf_.use_enu_) {
-            // In ENU, apply local gravity
-            propagated.v_ECEF += (propagated.q_ECEF_B * imu.acc_mps2 + gravity_ENU) * dt;
-        } else {
-            // In ECEF, would need to compute gravity vector (simplified here)
-            propagated.v_ECEF += propagated.q_ECEF_B * imu.acc_mps2 * dt;
-        }
-        
-        // Attitude integration with gyro
+        // --- ATTITUDE UPDATE ---
+        // Corrected gyro measurement (remove bias)
         Eigen::Vector3d corrected_gyro = imu.gyro_rps - propagated.b_g;
         Eigen::Vector3d omega_dt = corrected_gyro * dt;
         if (omega_dt.norm() > 1e-10) {
@@ -89,7 +78,66 @@ std::vector<State> UKFSigmaPoints::propagateStates(const ImuSample& imu, double 
             propagated.q_ECEF_B = propagated.q_ECEF_B * delta_q;
             propagated.q_ECEF_B.normalize();
         }
-        
+
+        // --- ACCELERATION COMPUTATION WITH COMPLETE PHYSICS ---
+        // 1. Corrected specific force (remove accelerometer bias)
+        Eigen::Vector3d acc_body = imu.acc_mps2 - propagated.b_a;
+
+        // 2. Transform to ECEF/ENU frame
+        Eigen::Vector3d acc_inertial = propagated.q_ECEF_B * acc_body;
+
+        // 3. Get gravity from model (if available) or use simplified model
+        Eigen::Vector3d gravity_vec;
+        if (gravity_provider_ && !ukf_.use_enu_) {
+            // In ECEF mode with gravity model:
+            // Get anomaly and compute total gravity
+            double anomaly_eotvos = gravity_provider_->getAnomaly(sigma_point.state.p_ECEF);
+            double anomaly_mps2 = anomaly_eotvos * 1e-9;  // Convert from E to m/s²
+
+            // Get normal gravity magnitude
+            Eigen::Vector3d lla = UKFMathUtils::ecefToLla(sigma_point.state.p_ECEF);
+            double normal_g = UKFMathUtils::getNormalGravity(lla(0));  // latitude in radians
+
+            // Total gravity magnitude
+            double total_g = normal_g + anomaly_mps2;
+
+            // Direction: radial inward (simplified, should use ellipsoid normal)
+            double r = sigma_point.state.p_ECEF.norm();
+            gravity_vec = -total_g * (sigma_point.state.p_ECEF / r);
+        } else if (ukf_.use_enu_) {
+            // In ENU, gravity is downward
+            gravity_vec = Eigen::Vector3d(0, 0, -9.81);
+        } else {
+            // Simplified gravity in ECEF (radial inward)
+            double r = sigma_point.state.p_ECEF.norm();
+            gravity_vec = -9.81 * (sigma_point.state.p_ECEF / r);
+        }
+
+        // 4. Compute Coriolis and centripetal accelerations (only in ECEF)
+        Eigen::Vector3d coriolis_accel = Eigen::Vector3d::Zero();
+        Eigen::Vector3d centripetal_accel = Eigen::Vector3d::Zero();
+
+        if (!ukf_.use_enu_) {
+            // Coriolis: -2 * Ω × v
+            coriolis_accel = -2.0 * omega_ie.cross(sigma_point.state.v_ECEF);
+
+            // Centripetal: -Ω × (Ω × r)
+            centripetal_accel = -omega_ie.cross(omega_ie.cross(sigma_point.state.p_ECEF));
+        }
+
+        // 5. Total acceleration in frame
+        Eigen::Vector3d total_accel = acc_inertial + gravity_vec + coriolis_accel + centripetal_accel;
+
+        // --- POSITION AND VELOCITY UPDATE ---
+        // Semi-implicit Euler integration for better stability
+        propagated.v_ECEF = sigma_point.state.v_ECEF + total_accel * dt;
+        propagated.p_ECEF = sigma_point.state.p_ECEF + sigma_point.state.v_ECEF * dt +
+                           0.5 * total_accel * dt * dt;
+
+        // Biases remain constant (random walk handled by process noise)
+        propagated.b_a = sigma_point.state.b_a;
+        propagated.b_g = sigma_point.state.b_g;
+
         propagated.t = sigma_point.state.t + dt;
         propagated_states.push_back(propagated);
     }

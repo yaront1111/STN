@@ -26,6 +26,7 @@ void UKFMeasurements::updateMeasurement(
     std::function<Eigen::Matrix<double, MeasDim, 1>(const State&)> measurement_model,
     bool use_joseph_form) {
     // With chi-square gate
+    // DEFAULT TO JOSEPH FORM FOR NUMERICAL STABILITY
     updateMeasurementInternal<MeasDim>(measurement, noise_cov, measurement_model, use_joseph_form, true);
 }
 
@@ -175,7 +176,9 @@ void UKFMeasurements::updateMeasurementInternal(
         auto IKH = I - K * H;
         P = IKH * P * IKH.transpose() + K * noise_cov * K.transpose();
     } else {
-        // Standard Kalman update - FIXED: Should be K*T' not K*S*K'
+        // Standard Kalman update - FIXED: Correct formula is P = P - K*S*K'
+        // But K*T' is also valid since T = P*H' and K = T*S^-1 => K*S = T
+        // So P - K*S*K' = P - T*K' = P - K*T' (both are equivalent)
         P = P - K * T.transpose();
     }
     

@@ -3,8 +3,9 @@
 #include <Eigen/Dense>
 #include <vector>
 
-// Forward declaration
+// Forward declarations
 class UKF;
+class GravityGradientProvider;
 
 // UKF constants (to avoid circular dependency)
 constexpr int UKF_ERROR_STATE_DIM = 15;
@@ -30,7 +31,7 @@ struct SigmaPoint {
  */
 class UKFSigmaPoints {
 public:
-    explicit UKFSigmaPoints(UKF& ukf);  // Note: non-const reference needed
+    explicit UKFSigmaPoints(UKF& ukf, GravityGradientProvider* gravity_provider = nullptr);
     
     // Generate sigma points from current state and covariance
     void generate(const State& nominal_state, 
@@ -55,6 +56,7 @@ public:
 
 private:
     UKF& ukf_;  // Non-const reference
+    GravityGradientProvider* gravity_provider_;  // For physics-correct propagation
     std::vector<SigmaPoint> sigma_points_;
     
     // Matrix square root computation with fallback

@@ -24,7 +24,7 @@ public:
         const Eigen::Matrix<double, MeasDim, 1>& measurement,
         const Eigen::Matrix<double, MeasDim, MeasDim>& noise_cov,
         std::function<Eigen::Matrix<double, MeasDim, 1>(const State&)> measurement_model,
-        bool use_joseph_form = false
+        bool use_joseph_form = true  // DEFAULT TO JOSEPH FORM FOR STABILITY
     );
 
     // Measurement update without chi-square gating (for trusted measurements like map matching)
@@ -33,7 +33,7 @@ public:
         const Eigen::Matrix<double, MeasDim, 1>& measurement,
         const Eigen::Matrix<double, MeasDim, MeasDim>& noise_cov,
         std::function<Eigen::Matrix<double, MeasDim, 1>(const State&)> measurement_model,
-        bool use_joseph_form = false
+        bool use_joseph_form = true  // DEFAULT TO JOSEPH FORM FOR STABILITY
     );
     
     // Specific measurement updates
