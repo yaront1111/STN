@@ -11,6 +11,7 @@
 #include <Eigen/Dense>
 #include "../cpp/core/types.h"
 #include "../cpp/core/ukf.h"
+#include "../cpp/core/ukf_math_utils.h"
 #include "../cpp/core/gravity_gradient_provider.h"
 #include "../cpp/hardware/hardware_interface.h"
 #include "../cpp/hardware/sensor_interfaces.h"
@@ -226,14 +227,18 @@ int main(int argc, char** argv) {
             // Transform to ECEF and compute anomaly
             Eigen::Vector3d gravity_ecef = current.q_ECEF_B * gravity_body;
             double measured_g = gravity_ecef.norm();
-            
-            // Get predicted gravity at current position
-            double predicted_g = 9.80665;  // Simplified - would use WGS84 model
-            double anomaly_mgal = (measured_g - predicted_g) * 100000.0;
-            
+
+            // Get WGS84 normal gravity based on current position
+            Eigen::Vector3d lla = UKFMathUtils::ecefToLla(current.p_ECEF);
+            double normal_g = UKFMathUtils::getNormalGravity(lla(0));  // lat in radians
+
+            // Compute anomaly in m/s^2, then convert to mGal
+            double anomaly_mps2 = measured_g - normal_g;
+            double anomaly_mgal = anomaly_mps2 * 100000.0;  // 1 m/s^2 = 100000 mGal
+
             // Update if significant
-            if (std::abs(anomaly_mgal) > 0.1) {
-                ukf.updateAnomaly(anomaly_mgal, 1.0);  // 1 mGal noise variance
+            if (std::abs(anomaly_mgal) > 0.1) {  // 0.1 mGal threshold
+                ukf.updateAnomaly(anomaly_mgal, 1.0);  // 1.0 mGal noise
                 anomaly_updates++;
             }
         }

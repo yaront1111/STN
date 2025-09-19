@@ -177,6 +177,25 @@ Eigen::Vector3d UKFMathUtils::llaToEcef(const Eigen::Vector3d& lla) {
     return Eigen::Vector3d(x, y, z);
 }
 
+double UKFMathUtils::getNormalGravity(double latitude_rad) {
+    // WGS84 gravity formula (Somigliana formula)
+    // Reference: WGS84 Earth Gravity Model
+
+    // Constants
+    const double g_equator = 9.7803253359;  // m/s² - gravity at equator
+    const double g_pole = 9.8321849378;     // m/s² - gravity at poles
+    const double e2 = WGS84_E2;             // First eccentricity squared
+
+    double sin_lat = std::sin(latitude_rad);
+    double sin2_lat = sin_lat * sin_lat;
+
+    // Somigliana formula for normal gravity on the ellipsoid
+    double numerator = g_equator * (1.0 + 0.00193185265241 * sin2_lat);
+    double denominator = std::sqrt(1.0 - e2 * sin2_lat);
+
+    return numerator / denominator;
+}
+
 // Template specializations
 template<>
 void UKFMathUtils::enforcePositiveDefinite<15>(Eigen::Matrix<double, 15, 15>& matrix, double min_eigenvalue) {

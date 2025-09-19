@@ -48,7 +48,10 @@ public:
     // Coordinate transformations
     static Eigen::Vector3d ecefToLla(const Eigen::Vector3d& ecef);
     static Eigen::Vector3d llaToEcef(const Eigen::Vector3d& lla);
-    
+
+    // Gravity computation
+    static double getNormalGravity(double latitude_rad);  // WGS84 normal gravity
+
     // Error-state operations (for UKF sigma points)
     static State applyErrorToState(const State& nominal_state, 
                                   const Eigen::Matrix<double, 15, 1>& error_vector);

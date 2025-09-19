@@ -1,7 +1,8 @@
 #include "ukf.h"
 #include "ukf_sigma_points.h"
-#include "ukf_measurements.h" 
+#include "ukf_measurements.h"
 #include "ukf_math_utils.h"
+#include "gravity_gradient_provider.h"
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -183,23 +184,31 @@ void UKF::updateGradient(const Eigen::Matrix3d& measured, const Eigen::Matrix3d&
     measurements_manager_->updateGravityGradient(measured, R);
 }
 
-void UKF::updateAnomaly(double measured, double noise) {
-    // Use the modular measurements manager for anomaly updates
+void UKF::updateAnomaly(double measured_anomaly_mgal, double noise_mgal) {
+    assert(measurements_manager_ && "setGravityProvider() must be called before anomaly updates");
+    assert(gravity_provider_ && "Gravity provider must be set");
+
     Eigen::Matrix<double, 1, 1> measurement;
-    measurement << measured;
-    Eigen::Matrix<double, 1, 1> R_scalar;
-    R_scalar << noise * noise;
-    
-    // Define measurement model for gravity anomaly
-    auto anomaly_model = [](const State& state) -> Eigen::Matrix<double, 1, 1> {
-        // Simple model: anomaly is proportional to altitude variation
-        Eigen::Matrix<double, 1, 1> predicted;
-        double alt = state.p_ECEF.norm() - 6371000.0;  // altitude from sea level
-        predicted << alt * 1e-6;  // Convert to mGal equivalent
-        return predicted;
+    measurement << measured_anomaly_mgal;
+
+    Eigen::Matrix<double, 1, 1> R;
+    R << noise_mgal * noise_mgal;
+
+    // Correct measurement model for gravity anomaly using the gravity provider
+    auto anomaly_model = [this](const State& state) -> Eigen::Matrix<double, 1, 1> {
+        Eigen::Matrix<double, 1, 1> predicted_anomaly;
+
+        // Get the gravity anomaly from the provider (returns Eötvös = 10^-9 s^-2)
+        // Note: 1 Eötvös = 0.1 mGal (since 1 mGal = 10^-5 m/s^2 = 10^-8 s^-2)
+        double anomaly_eotvos = gravity_provider_->getAnomaly(state.p_ECEF);
+
+        // Convert from Eötvös to mGal for consistency with measurement
+        predicted_anomaly << anomaly_eotvos * 0.1;
+
+        return predicted_anomaly;
     };
-    
-    measurements_manager_->updateMeasurement<1>(measurement, R_scalar, anomaly_model);
+
+    measurements_manager_->updateMeasurement<1>(measurement, R, anomaly_model);
 }
 
 void UKF::updateMagnetometer(const Eigen::Vector3d& mag_body, 
