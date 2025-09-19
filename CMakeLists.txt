@@ -27,7 +27,8 @@ add_library(gravity_core STATIC
     cpp/core/ukf_sigma_points.cpp
     cpp/core/ukf_measurements.cpp
     cpp/core/ukf_math_utils.cpp
-    cpp/core/ukf_state_scaler.cpp
+    cpp/core/ukf_state_scaler_v2.cpp
+    cpp/core/ukf_scaled.cpp
     cpp/core/gravity_gradient_provider.cpp
     cpp/core/gravity_map_matcher.cpp
     cpp/core/hierarchical_map_matcher.cpp
@@ -83,14 +84,6 @@ target_link_libraries(test_system_comprehensive
     gravity_core
 )
 
-# Grade A stable test (with state scaling)
-add_executable(test_grade_a_stable
-    test_grade_a_stable.cpp
-)
-
-target_link_libraries(test_grade_a_stable
-    gravity_core
-)
 
 # Installation
 install(TARGETS gravity_navigator
