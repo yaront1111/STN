@@ -10,12 +10,15 @@ UKFSigmaPoints::UKFSigmaPoints(UKF& ukf, GravityGradientProvider* gravity_provid
 }
 
 void UKFSigmaPoints::generate(const State& nominal_state,
-                              const Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>& S,
+                              const Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>& S_scaled,
                               double lambda) {
-    // S is already the Cholesky factor (square root of P)!
-    // No need to compute matrix square root - huge numerical win!
+    // S_scaled is the SCALED Cholesky factor for numerical stability
+    // We need to unscale the offsets before applying to the state
 
     double sqrt_factor = std::sqrt(UKF_ERROR_STATE_DIM + lambda);
+
+    // Get the state scaler from UKF
+    const auto& scaler = ukf_.getStateScaler();
 
     // Generate sigma points
     // Central sigma point (index 0)
@@ -23,12 +26,17 @@ void UKFSigmaPoints::generate(const State& nominal_state,
 
     // Positive and negative sigma points
     for (int i = 0; i < UKF_ERROR_STATE_DIM; ++i) {
-        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> offset =
-            sqrt_factor * S.col(i);  // Use S directly - it's already the sqrt!
+        // Get column from SCALED Cholesky factor
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> offset_scaled =
+            sqrt_factor * S_scaled.col(i);
 
-        // Apply error to nominal state using UKF's method
-        State pos_state = UKFMathUtils::applyErrorToState(nominal_state, offset);
-        State neg_state = UKFMathUtils::applyErrorToState(nominal_state, -offset);
+        // CRITICAL: Unscale the offset to real-world units before applying to state
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> offset_real =
+            scaler.fromScaledSpace(offset_scaled);
+
+        // Apply error to nominal state using real-world offset
+        State pos_state = UKFMathUtils::applyErrorToState(nominal_state, offset_real);
+        State neg_state = UKFMathUtils::applyErrorToState(nominal_state, -offset_real);
 
         // Positive sigma point (index i+1)
         sigma_points_[i + 1] = SigmaPoint(pos_state, 0, 0);  // weights will be set later
@@ -220,72 +228,81 @@ Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>
 UKFSigmaPoints::computeCholeskyFactor(const std::vector<State>& states,
                                      const State& mean_state,
                                      const Eigen::VectorXd& weights_cov) {
-    // Proper square-root UKF formulation
-    // Build matrix with ALL sigma points, handling negative weight correctly
+    // Compute Cholesky factor in SCALED space for numerical stability
+    // This is critical for maintaining good condition numbers
+
+    // Get the state scaler from UKF
+    const auto& scaler = ukf_.getStateScaler();
 
     int num_sigma = states.size();
 
     // First, handle the central point separately
-    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error0 =
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error0_real =
         UKFMathUtils::computeErrorVector(states[0], mean_state);
+
+    // CRITICAL: Scale the error to scaled space
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error0_scaled =
+        scaler.toScaledSpace(error0_real);
 
     // For UKF, w_0^c is typically negative, but we need special handling
     double w0 = weights_cov(0);
 
-    // Build the matrix of weighted deviations for positive weights
-    // We'll process all points with positive weights first
+    // Build the matrix of weighted deviations in SCALED space
     Eigen::Matrix<double, UKF_ERROR_STATE_DIM, Eigen::Dynamic> A(UKF_ERROR_STATE_DIM, num_sigma - 1);
 
     for (int i = 1; i < num_sigma; ++i) {
-        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error =
+        // Compute error in real-world units
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error_real =
             UKFMathUtils::computeErrorVector(states[i], mean_state);
+
+        // CRITICAL: Scale to scaled space
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error_scaled =
+            scaler.toScaledSpace(error_real);
 
         // All non-central weights should be positive
         double sqrt_weight = std::sqrt(std::abs(weights_cov(i)));
-        A.col(i-1) = sqrt_weight * error;
+        A.col(i-1) = sqrt_weight * error_scaled;
     }
 
-    // Perform QR decomposition on positive weight contributions
+    // Perform QR decomposition on positive weight contributions (in scaled space)
     Eigen::HouseholderQR<Eigen::Matrix<double, UKF_ERROR_STATE_DIM, Eigen::Dynamic>> qr(A);
 
-    // Extract R matrix (upper triangular)
-    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> R =
+    // Extract R matrix (upper triangular) in scaled space
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> R_scaled =
         Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>::Zero();
 
     // Only extract the square part that exists
     int rank = std::min((int)A.cols(), (int)UKF_ERROR_STATE_DIM);
     if (rank > 0) {
-        R.topLeftCorner(rank, rank) = qr.matrixQR()
+        R_scaled.topLeftCorner(rank, rank) = qr.matrixQR()
             .topLeftCorner(rank, rank)
             .triangularView<Eigen::Upper>();
     }
 
-    // Now handle the central point with negative weight
+    // Now handle the central point with negative weight (in scaled space)
     if (w0 < 0) {
-        // This is a rank-1 downdate: S_new*S_new' = R'*R - |w0|*(x0-xbar)*(x0-xbar)'
+        // This is a rank-1 downdate in scaled space
         double sqrt_abs_w0 = std::sqrt(std::abs(w0));
-        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> v = sqrt_abs_w0 * error0;
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> v_scaled = sqrt_abs_w0 * error0_scaled;
 
-        // Use cholupdate with negative alpha for downdate
-        // First convert R to lower triangular
-        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> S = R.transpose();
+        // Convert R to lower triangular
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> S_scaled = R_scaled.transpose();
 
-        // Perform rank-1 downdate
-        UKFMathUtils::cholupdate<UKF_ERROR_STATE_DIM>(S, v, -1.0);
+        // Perform rank-1 downdate in scaled space
+        UKFMathUtils::cholupdate<UKF_ERROR_STATE_DIM>(S_scaled, v_scaled, -1.0);
 
-        return S;  // Already lower triangular
+        return S_scaled;  // Return SCALED Cholesky factor
     } else if (w0 > 0) {
         // This shouldn't happen in standard UKF, but handle it
-        // This would be a rank-1 update
         double sqrt_w0 = std::sqrt(w0);
-        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> v = sqrt_w0 * error0;
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> v_scaled = sqrt_w0 * error0_scaled;
 
-        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> S = R.transpose();
-        UKFMathUtils::cholupdate<UKF_ERROR_STATE_DIM>(S, v, 1.0);
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> S_scaled = R_scaled.transpose();
+        UKFMathUtils::cholupdate<UKF_ERROR_STATE_DIM>(S_scaled, v_scaled, 1.0);
 
-        return S;
+        return S_scaled;  // Return SCALED Cholesky factor
     }
 
-    // If w0 == 0, just return the transposed R
-    return R.transpose();  // Convert to lower triangular
+    // If w0 == 0, just return the transposed R (in scaled space)
+    return R_scaled.transpose();  // Return SCALED Cholesky factor
 }

@@ -83,36 +83,82 @@ void UKF::init(const State& x0_ECEF, const Eigen::Matrix<double, ERROR_STATE_DIM
         // Gyro bias: 0.0001 rad²/s² - balanced with position
         P_temp.block<3,3>(BG_IDX, BG_IDX) = Eigen::Matrix3d::Identity() * 0.0001;
 
+        // Scale covariance to scaled space
+        auto P_scaled = state_scaler_.scaleCovariance(P_temp);
+
         // Convert to Cholesky factor
-        UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_temp);
-        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_temp);
+        UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_scaled);
+        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
         if (llt.info() == Eigen::Success) {
-            S_ = llt.matrixL();
+            S_scaled_ = llt.matrixL();
         } else {
             std::cerr << "ERROR: Failed to compute Cholesky factor in init!\n";
-            S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+            S_scaled_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
         }
 
-        std::cout << "ENU mode: Square-root covariance initialized for local frame operation\n";
+        std::cout << "ENU mode: Square-root covariance initialized with state scaling\n";
 
-        // Debug: Check condition number of S (should be sqrt of P's condition)
-        double cond_S = UKFMathUtils::computeConditionNumber(S_);
-        std::cout << "  Condition number of S: " << cond_S << " (sqrt improvement over P)\n";
+        // Debug: Check condition number of S_scaled (should be dramatically better)
+        double cond_S = UKFMathUtils::computeConditionNumber(S_scaled_);
+        std::cout << "  Condition number of S_scaled: " << cond_S << " (with state scaling)\n";
     } else {
         nominal_state_ = x0_ECEF;
 
-        // Ensure P0 is positive definite before Cholesky decomposition
+        // Ensure P0 is positive definite before scaling
         Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_temp = P0;
         UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_temp);
 
-        // Compute Cholesky factor
-        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_temp);
+        // Debug: Show detailed scaling diagnostics
+        double cond_P_before = UKFMathUtils::computeConditionNumber(P_temp);
+        std::cout << "\n=== SCALING DIAGNOSTICS ===\n";
+        std::cout << "Initial Position: " << nominal_state_.p_ECEF.transpose() << " m\n";
+        std::cout << "Position magnitude: " << nominal_state_.p_ECEF.norm() << " m\n";
+        std::cout << "\nInitial Covariance Diagonal (before scaling):\n";
+        for (int i = 0; i < ERROR_STATE_DIM; i++) {
+            std::cout << "  P(" << i << "," << i << ") = " << P_temp(i,i) << " ";
+            if (i < 3) std::cout << "(position)";
+            else if (i < 6) std::cout << "(velocity)";
+            else if (i < 9) std::cout << "(attitude)";
+            else if (i < 12) std::cout << "(accel bias)";
+            else std::cout << "(gyro bias)";
+            std::cout << "\n";
+        }
+        std::cout << "Condition number before scaling: " << cond_P_before << "\n";
+
+        // Show scaling matrix diagonal
+        std::cout << "\nScaling factors (D diagonal):\n";
+        const auto& D = state_scaler_.getScalingMatrix();
+        for (int i = 0; i < ERROR_STATE_DIM; i++) {
+            std::cout << "  D(" << i << "," << i << ") = " << D(i,i) << "\n";
+        }
+
+        // Scale covariance to scaled space
+        auto P_scaled = state_scaler_.scaleCovariance(P_temp);
+
+        std::cout << "\nScaled Covariance Diagonal (after scaling):\n";
+        for (int i = 0; i < ERROR_STATE_DIM; i++) {
+            std::cout << "  P_scaled(" << i << "," << i << ") = " << P_scaled(i,i) << " ";
+            double ratio = P_scaled(i,i) / P_temp(i,i);
+            std::cout << "(ratio: " << ratio << ")\n";
+        }
+
+        double cond_P_after = UKFMathUtils::computeConditionNumber(P_scaled);
+        std::cout << "Condition number after scaling: " << cond_P_after << "\n";
+        std::cout << "=========================\n\n";
+
+        // Compute Cholesky factor in scaled space
+        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
         if (llt.info() == Eigen::Success) {
-            S_ = llt.matrixL();
+            S_scaled_ = llt.matrixL();
         } else {
             std::cerr << "ERROR: Failed to compute Cholesky factor in init!\n";
-            S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+            S_scaled_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
         }
+
+        // Debug: Check condition number of Cholesky factor
+        double cond_S = UKFMathUtils::computeConditionNumber(S_scaled_);
+        std::cout << "ECEF mode: Condition number of S_scaled: " << cond_S << " (Cholesky factor)\n";
+        std::cout << "  Improvement factor: " << cond_P_before / cond_P_after << "x\n";
     }
 }
 
@@ -134,8 +180,9 @@ void UKF::predict(const ImuSample& imu, double dt) {
         checkAndReanchor();
     }
 
-    // Generate sigma points using Cholesky factor directly (no matrix sqrt needed!)
-    sigma_points_manager_->generate(nominal_state_, S_, lambda_);
+    // Generate sigma points using SCALED Cholesky factor
+    // The sigma points manager will handle the scaling/unscaling internally
+    sigma_points_manager_->generate(nominal_state_, S_scaled_, lambda_);
 
     // Propagate sigma points through motion model
     auto propagated_states = sigma_points_manager_->propagateStates(imu, dt);
@@ -143,25 +190,27 @@ void UKF::predict(const ImuSample& imu, double dt) {
     // Compute predicted mean state
     nominal_state_ = sigma_points_manager_->computeMeanState(propagated_states, weights_mean_);
 
-    // Compute predicted Cholesky factor using QR decomposition (more stable!)
-    S_ = sigma_points_manager_->computeCholeskyFactor(propagated_states, nominal_state_, weights_cov_);
+    // Compute predicted SCALED Cholesky factor using QR decomposition
+    // This returns the Cholesky factor in SCALED space
+    S_scaled_ = sigma_points_manager_->computeCholeskyFactor(propagated_states, nominal_state_, weights_cov_);
 
-    // Add process noise using QR decomposition
+    // Add process noise in SCALED space
     addProcessNoiseSquareRoot(dt);
 
-    // Check condition number of S (should be much better than P)
+    // Check condition number of S_scaled (should be much better with scaling)
     static int predict_count = 0;
     if (++predict_count % 100 == 0) {  // Check every 100 predictions
-        double cond_S = UKFMathUtils::computeConditionNumber(S_);
+        double cond_S = UKFMathUtils::computeConditionNumber(S_scaled_);
         if (cond_S > 1e6) {
-            std::cerr << "WARNING: Condition number of S is " << cond_S << "\n";
+            std::cerr << "WARNING: Condition number of S_scaled is " << cond_S << "\n";
         }
     }
 }
 
 void UKF::addProcessNoise(double dt) {
-    // Legacy method - convert to square root form
-    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P = S_ * S_.transpose();
+    // Legacy method - convert from scaled square root form
+    auto S_real = state_scaler_.unscaleCholeskyFactor(S_scaled_);
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P = S_real * S_real.transpose();
 
     // Add process noise to covariance
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> Q =
@@ -180,27 +229,30 @@ void UKF::addProcessNoise(double dt) {
 
     P += Q;
 
-    // Convert back to Cholesky factor
-    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P, cfg_.numerical.min_eigenvalue);
-    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P);
+    // Scale covariance and convert back to Cholesky factor
+    auto P_scaled = state_scaler_.scaleCovariance(P);
+    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_scaled, cfg_.numerical.min_eigenvalue);
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
     if (llt.info() == Eigen::Success) {
-        S_ = llt.matrixL();
+        S_scaled_ = llt.matrixL();
     }
 }
 
 void UKF::addProcessNoiseSquareRoot(double dt) {
-    // Proper square-root process noise addition using QR decomposition
-    // S_new = qr([S; sqrt(Q)]) where Q is the process noise covariance
+    // Process noise addition in SCALED space for numerical stability
+    // S_scaled_new = cholupdate(S_scaled, scaled_process_noise)
 
-    // Create diagonal process noise standard deviations
+    // Create diagonal process noise standard deviations in real-world units
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> q_std =
         Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
 
-    // Get current uncertainty for adaptive scaling (from diagonal of S*S')
+    // Get current uncertainty for adaptive scaling (from scaled S)
+    // First unscale to get real-world uncertainty
+    auto S_real = state_scaler_.unscaleCholeskyFactor(S_scaled_);
     double pos_std = 0, vel_std = 0;
     for (int i = 0; i < 3; i++) {
-        pos_std += S_.row(POS_IDX + i).squaredNorm();
-        vel_std += S_.row(VEL_IDX + i).squaredNorm();
+        pos_std += S_real.row(POS_IDX + i).squaredNorm();
+        vel_std += S_real.row(VEL_IDX + i).squaredNorm();
     }
     pos_std = std::sqrt(pos_std / 3.0);
     vel_std = std::sqrt(vel_std / 3.0);
@@ -209,7 +261,7 @@ void UKF::addProcessNoiseSquareRoot(double dt) {
     double pos_scale = (pos_std < 10.0) ? 2.0 : 1.0;
     double vel_scale = (vel_std < 1.0) ? 2.0 : 1.0;
 
-    // Set process noise standard deviations
+    // Set process noise standard deviations in real-world units
     double dt_sqrt = std::sqrt(dt);
     for (int i = 0; i < 3; i++) {
         q_std(POS_IDX + i) = cfg_.process_noise.position * dt * pos_scale;
@@ -219,60 +271,70 @@ void UKF::addProcessNoiseSquareRoot(double dt) {
         q_std(BG_IDX + i) = cfg_.process_noise.gyro_bias * dt_sqrt;
     }
 
-    // Method 1: Sequential rank-1 updates (more stable than QR for diagonal Q)
-    // For each non-zero process noise element, perform a rank-1 update
+    // CRITICAL: Scale the process noise to scaled space
+    auto q_std_scaled = state_scaler_.scaleProcessNoise(q_std);
+
+    // Sequential rank-1 updates in SCALED space
     for (int i = 0; i < ERROR_STATE_DIM; i++) {
-        if (q_std(i) > 1e-12) {  // Only update if significant
+        if (q_std_scaled(i) > 1e-12) {  // Only update if significant
             Eigen::Matrix<double, ERROR_STATE_DIM, 1> ei =
                 Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
-            ei(i) = q_std(i);
+            ei(i) = q_std_scaled(i);
 
-            // Rank-1 update: S_new*S_new' = S*S' + ei*ei'
-            UKFMathUtils::cholupdate<ERROR_STATE_DIM>(S_, ei, 1.0);
+            // Rank-1 update in scaled space: S_scaled_new*S_scaled_new' = S_scaled*S_scaled' + ei*ei'
+            UKFMathUtils::cholupdate<ERROR_STATE_DIM>(S_scaled_, ei, 1.0);
         }
     }
 
     // Ensure minimum uncertainty on diagonal to prevent collapse
-    double min_pos_std = 1.0;    // 1 m minimum
-    double min_vel_std = 0.1;    // 0.1 m/s minimum
-    double min_att_std = 0.001;  // 0.001 rad minimum
-    double min_ba_std = 1e-4;    // Small bias minimums
-    double min_bg_std = 1e-5;
+    // These are in SCALED space, so we need to scale them
+    double min_pos_std_real = 1.0;    // 1 m minimum in real space
+    double min_vel_std_real = 0.1;    // 0.1 m/s minimum
+    double min_att_std_real = 0.001;  // 0.001 rad minimum
+    double min_ba_std_real = 1e-4;    // Small bias minimums
+    double min_bg_std_real = 1e-5;
+
+    // Convert to scaled space
+    double min_pos_std = min_pos_std_real / UKFStateScaler::POSITION_SCALE;
+    double min_vel_std = min_vel_std_real / UKFStateScaler::VELOCITY_SCALE;
+    double min_att_std = min_att_std_real / UKFStateScaler::ATTITUDE_SCALE;
+    double min_ba_std = min_ba_std_real / UKFStateScaler::ACCEL_BIAS_SCALE;
+    double min_bg_std = min_bg_std_real / UKFStateScaler::GYRO_BIAS_SCALE;
 
     for (int i = 0; i < 3; i++) {
-        if (S_(POS_IDX + i, POS_IDX + i) < min_pos_std) {
-            S_(POS_IDX + i, POS_IDX + i) = min_pos_std;
+        if (S_scaled_(POS_IDX + i, POS_IDX + i) < min_pos_std) {
+            S_scaled_(POS_IDX + i, POS_IDX + i) = min_pos_std;
         }
-        if (S_(VEL_IDX + i, VEL_IDX + i) < min_vel_std) {
-            S_(VEL_IDX + i, VEL_IDX + i) = min_vel_std;
+        if (S_scaled_(VEL_IDX + i, VEL_IDX + i) < min_vel_std) {
+            S_scaled_(VEL_IDX + i, VEL_IDX + i) = min_vel_std;
         }
-        if (S_(ATT_IDX + i, ATT_IDX + i) < min_att_std) {
-            S_(ATT_IDX + i, ATT_IDX + i) = min_att_std;
+        if (S_scaled_(ATT_IDX + i, ATT_IDX + i) < min_att_std) {
+            S_scaled_(ATT_IDX + i, ATT_IDX + i) = min_att_std;
         }
-        if (S_(BA_IDX + i, BA_IDX + i) < min_ba_std) {
-            S_(BA_IDX + i, BA_IDX + i) = min_ba_std;
+        if (S_scaled_(BA_IDX + i, BA_IDX + i) < min_ba_std) {
+            S_scaled_(BA_IDX + i, BA_IDX + i) = min_ba_std;
         }
-        if (S_(BG_IDX + i, BG_IDX + i) < min_bg_std) {
-            S_(BG_IDX + i, BG_IDX + i) = min_bg_std;
+        if (S_scaled_(BG_IDX + i, BG_IDX + i) < min_bg_std) {
+            S_scaled_(BG_IDX + i, BG_IDX + i) = min_bg_std;
         }
     }
 
     // Periodically re-triangularize to maintain numerical properties
     static int noise_add_count = 0;
     if (++noise_add_count % 100 == 0) {
-        // Every 100 updates, ensure S is properly triangular
-        // by reconstructing from P = S*S'
-        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P = S_ * S_.transpose();
+        // Every 100 updates, ensure S_scaled is properly triangular
+        // by reconstructing from P_scaled = S_scaled*S_scaled'
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = S_scaled_ * S_scaled_.transpose();
 
-        // Small regularization to maintain conditioning
+        // Small regularization to maintain conditioning (in scaled space)
         for (int i = 0; i < ERROR_STATE_DIM; i++) {
-            P(i,i) += 1e-9;
+            P_scaled(i,i) += 1e-9;
         }
 
-        // Recompute Cholesky factor
-        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P);
+        // Recompute Cholesky factor in scaled space
+        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
         if (llt.info() == Eigen::Success) {
-            S_ = llt.matrixL();
+            S_scaled_ = llt.matrixL();
         }
     }
 }

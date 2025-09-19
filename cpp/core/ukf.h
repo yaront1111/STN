@@ -3,6 +3,7 @@
 #include "integrity.hpp"
 #include "ukf_config.h"
 #include "ukf_math_utils.h"
+#include "ukf_state_scaler.h"
 #include <Eigen/Dense>
 #include <vector>
 #include <iostream>
@@ -125,18 +126,30 @@ public:
         return use_enu_ ? enuToEcef(nominal_state_) : nominal_state_;
     }
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCovariance() const {
-        // Return P = S * S^T from the Cholesky factor
-        return S_ * S_.transpose();
+        // Return P = D * S_scaled * S_scaled^T * D' from the scaled Cholesky factor
+        auto S_real = state_scaler_.unscaleCholeskyFactor(S_scaled_);
+        return S_real * S_real.transpose();
     }
 
     // Square-root specific accessors
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCholeksyFactor() const {
-        return S_;
+        // Return the unscaled (real-world) Cholesky factor
+        return state_scaler_.unscaleCholeskyFactor(S_scaled_);
     }
     void setCholeskyFactor(const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& S) {
-        S_ = S;
+        // Store as scaled Cholesky factor
+        S_scaled_ = state_scaler_.scaleCholeskyFactor(S);
     }
-    
+
+    // Get scaled Cholesky factor (for internal use)
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getScaledCholeskyFactor() const {
+        return S_scaled_;
+    }
+
+    // Get state scaler (for access from sigma points and measurements)
+    const UKFStateScaler& getStateScaler() const { return state_scaler_; }
+    UKFStateScaler& getStateScaler() { return state_scaler_; }
+
     // Getters for modular components
     const Eigen::VectorXd& getWeightsMean() const { return weights_mean_; }
     const Eigen::VectorXd& getWeightsCov() const { return weights_cov_; }
@@ -146,16 +159,19 @@ public:
     // Update state and covariance (for measurements)
     void setState(const State& state) { nominal_state_ = state; }
     void setCovariance(const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P) {
-        // Convert covariance to Cholesky factor
-        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P);
+        // Scale covariance to scaled space first
+        auto P_scaled = state_scaler_.scaleCovariance(P);
+
+        // Convert scaled covariance to Cholesky factor
+        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
         if (llt.info() == Eigen::Success) {
-            S_ = llt.matrixL();
+            S_scaled_ = llt.matrixL();
         } else {
             // Fallback: enforce positive definiteness first
-            Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_safe = P;
+            Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_safe = P_scaled;
             UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_safe, 1e-9);
             Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt_safe(P_safe);
-            S_ = llt_safe.matrixL();
+            S_scaled_ = llt_safe.matrixL();
         }
     }
     
@@ -172,9 +188,13 @@ protected:
     // Nominal state (16D with quaternion)
     State nominal_state_;
 
-    // Square-root covariance (Cholesky factor S where P = S*S^T)
-    // Using lower triangular matrix for numerical stability
-    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> S_;
+    // SCALED Square-root covariance (Cholesky factor S_scaled where P_scaled = S_scaled*S_scaled^T)
+    // This is the Cholesky factor in SCALED SPACE for numerical stability
+    // Real covariance: P = D * P_scaled * D' = D * S_scaled * S_scaled' * D'
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> S_scaled_;
+
+    // State scaler for numerical stability
+    UKFStateScaler state_scaler_;
 
     // UKF configuration and parameters
     UKFConfig cfg_;
