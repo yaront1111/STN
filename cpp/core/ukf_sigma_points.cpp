@@ -21,12 +21,13 @@ void UKFSigmaPoints::generate(const State& nominal_state,
     if (!UKFMathUtils::checkMatrixValidity<UKF_ERROR_STATE_DIM>(P_safe)) {
         std::cerr << "WARNING: Resetting invalid covariance matrix in sigma point generation!\n";
         // Reset to a safe diagonal matrix if still invalid
-        P_safe = Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>::Identity() * 1e-6;
-        P_safe.block<3,3>(0,0) *= 100.0;  // Position uncertainty: 10cm
-        P_safe.block<3,3>(3,3) *= 0.01;   // Velocity uncertainty: 0.1m/s
-        P_safe.block<3,3>(6,6) *= 0.0001; // Attitude uncertainty: 0.01rad
-        P_safe.block<3,3>(9,9) *= 1e-6;   // Accel bias uncertainty: 1e-3 m/s²
-        P_safe.block<3,3>(12,12) *= 1e-8; // Gyro bias uncertainty: 1e-4 rad/s
+        // Use balanced values appropriate for ENU operation
+        P_safe = Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>::Identity();
+        P_safe.block<3,3>(0,0) *= 1.0;     // Position: 1 m²
+        P_safe.block<3,3>(3,3) *= 0.1;     // Velocity: 0.1 m²/s²
+        P_safe.block<3,3>(6,6) *= 0.01;    // Attitude: 0.01 rad²
+        P_safe.block<3,3>(9,9) *= 0.001;   // Accel bias: 0.001 m²/s⁴
+        P_safe.block<3,3>(12,12) *= 0.0001; // Gyro bias: 0.0001 rad²/s²
     }
 
     // Compute matrix square root using robust method
@@ -59,14 +60,26 @@ void UKFSigmaPoints::generate(const State& nominal_state,
 std::vector<State> UKFSigmaPoints::propagateStates(const ImuSample& imu, double dt) {
     std::vector<State> propagated_states;
     propagated_states.reserve(sigma_points_.size());
-    
+
     for (const auto& sigma_point : sigma_points_) {
-        // Use direct integration since UKF doesn't have propagateState method yet
+        // Use direct integration
         State propagated = sigma_point.state;
-        
-        // Simple integration step (this should be replaced with actual IMU integration)
+
+        // Position integration
         propagated.p_ECEF += propagated.v_ECEF * dt;
-        propagated.v_ECEF += propagated.q_ECEF_B * imu.acc_mps2 * dt;
+
+        // Velocity integration with gravity
+        // In ENU frame, gravity is [0, 0, -9.81] m/s²
+        Eigen::Vector3d gravity_ENU(0, 0, -9.81);
+
+        // Check if we're in ENU mode
+        if (ukf_.use_enu_) {
+            // In ENU, apply local gravity
+            propagated.v_ECEF += (propagated.q_ECEF_B * imu.acc_mps2 + gravity_ENU) * dt;
+        } else {
+            // In ECEF, would need to compute gravity vector (simplified here)
+            propagated.v_ECEF += propagated.q_ECEF_B * imu.acc_mps2 * dt;
+        }
         
         // Attitude integration with gyro
         Eigen::Vector3d corrected_gyro = imu.gyro_rps - propagated.b_g;

@@ -50,15 +50,45 @@ void UKF::computeWeights() {
     }
 }
 
-void UKF::init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P0, bool use_scaling) {
-    use_scaling_ = use_scaling;
+void UKF::init(const State& x0_ECEF, const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P0, bool use_enu) {
+    use_enu_ = use_enu;
 
-    if (use_scaling_) {
-        // Scale the initial state and covariance for better conditioning
-        nominal_state_ = scaleState(x0);
-        P_ = scaleCovariance(P0);
+    if (use_enu_) {
+        // Initialize ENU frame at initial position
+        initializeEnu(x0_ECEF.p_ECEF);
+
+        // Convert initial state to ENU
+        nominal_state_ = ecefToEnu(x0_ECEF);
+
+        // In ENU mode, we receive P0 in ECEF mindset but need to adapt it for ENU scale
+        // Key insight: In ENU, position starts at [0,0,0], so we need much smaller position variance
+        P_ = P0;
+
+        // Critical: Balance covariance to achieve good condition number
+        // Goal: Keep ratio of largest to smallest eigenvalue < 1e6
+
+        // Position: 1 m² (1m uncertainty in local frame)
+        P_.block<3,3>(POS_IDX, POS_IDX) = Eigen::Matrix3d::Identity() * 1.0;
+
+        // Velocity: 0.1 m²/s² (0.316 m/s uncertainty)
+        P_.block<3,3>(VEL_IDX, VEL_IDX) = Eigen::Matrix3d::Identity() * 0.1;
+
+        // Attitude: 0.01 rad² (0.1 rad uncertainty)
+        P_.block<3,3>(ATT_IDX, ATT_IDX) = Eigen::Matrix3d::Identity() * 0.01;
+
+        // Accel bias: 0.001 m²/s⁴
+        P_.block<3,3>(BA_IDX, BA_IDX) = Eigen::Matrix3d::Identity() * 0.001;
+
+        // Gyro bias: 0.0001 rad²/s² - balanced with position
+        P_.block<3,3>(BG_IDX, BG_IDX) = Eigen::Matrix3d::Identity() * 0.0001;
+
+        std::cout << "ENU mode: Covariance scaled for local frame operation\n";
+
+        // Debug: Check condition number after scaling
+        double cond = UKFMathUtils::computeConditionNumber(P_);
+        std::cout << "  Condition number after ENU scaling: " << cond << "\n";
     } else {
-        nominal_state_ = x0;
+        nominal_state_ = x0_ECEF;
         P_ = P0;
     }
     UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_);
@@ -75,6 +105,11 @@ void UKF::predict(const ImuSample& imu, double dt) {
     if (!UKFMathUtils::checkMatrixValidity<ERROR_STATE_DIM>(P_)) {
         std::cerr << "WARNING: Invalid covariance before predict, fixing...\n";
         UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_, cfg_.numerical.min_eigenvalue);
+    }
+
+    // Check if we need to re-anchor in ENU mode
+    if (use_enu_) {
+        checkAndReanchor();
     }
 
     // Generate sigma points using modular manager
@@ -263,101 +298,100 @@ void UKF::updateTerrainAltitude(double radar_alt, double terrain_height, double 
 // updateScalarPseudo also removed - not used
 
 // ============================================================================
-// State Scaling Methods for Numerical Stability
+// ENU Frame Methods for Numerical Stability
 // ============================================================================
 
-State UKF::scaleState(const State& unscaled) const {
-    State scaled;
-    scaled.p_ECEF = unscaled.p_ECEF / POS_SCALE;  // Scale position to ~1
-    scaled.v_ECEF = unscaled.v_ECEF / VEL_SCALE;  // Scale velocity to ~1
-    scaled.q_ECEF_B = unscaled.q_ECEF_B;          // Quaternions unchanged
-    scaled.b_a = unscaled.b_a;                    // Biases unchanged
-    scaled.b_g = unscaled.b_g;
-    return scaled;
+void UKF::initializeEnu(const Eigen::Vector3d& anchor_ECEF) {
+    enu_anchor_ECEF_ = anchor_ECEF;
+
+    // Compute ENU to ECEF rotation at anchor
+    Eigen::Vector3d lla = UKFMathUtils::ecefToLla(anchor_ECEF);
+    double lat = lla(0);
+    double lon = lla(1);
+
+    double sin_lat = std::sin(lat);
+    double cos_lat = std::cos(lat);
+    double sin_lon = std::sin(lon);
+    double cos_lon = std::cos(lon);
+
+    // Rotation matrix from ENU to ECEF
+    R_ECEF_ENU_ << -sin_lon, -sin_lat*cos_lon, cos_lat*cos_lon,
+                    cos_lon, -sin_lat*sin_lon, cos_lat*sin_lon,
+                    0,        cos_lat,          sin_lat;
+
+    // Debug rotation matrix
+    if (false) {  // Set to true to enable debug
+        std::cout << "[DEBUG] ENU initialization at lat=" << lat*180/M_PI
+                  << "°, lon=" << lon*180/M_PI << "°\n";
+        std::cout << "R_ECEF_ENU:\n" << R_ECEF_ENU_ << "\n";
+    }
 }
 
-State UKF::unscaleState(const State& scaled) const {
-    State unscaled;
-    unscaled.p_ECEF = scaled.p_ECEF * POS_SCALE;  // Unscale position
-    unscaled.v_ECEF = scaled.v_ECEF * VEL_SCALE;  // Unscale velocity
-    unscaled.q_ECEF_B = scaled.q_ECEF_B;
-    unscaled.b_a = scaled.b_a;
-    unscaled.b_g = scaled.b_g;
-    return unscaled;
+State UKF::ecefToEnu(const State& state_ECEF) const {
+    State state_ENU;
+
+    // Position: convert to ENU relative to anchor
+    Eigen::Vector3d delta_ECEF = state_ECEF.p_ECEF - enu_anchor_ECEF_;
+    state_ENU.p_ECEF = R_ECEF_ENU_.transpose() * delta_ECEF;  // Actually p_ENU
+
+    // Velocity: rotate to ENU frame
+    state_ENU.v_ECEF = R_ECEF_ENU_.transpose() * state_ECEF.v_ECEF;  // Actually v_ENU
+
+    // Quaternion: compose with ENU rotation
+    // q_ENU_B = q_ENU_ECEF * q_ECEF_B
+    Eigen::Quaterniond q_ENU_ECEF(R_ECEF_ENU_.transpose());
+    state_ENU.q_ECEF_B = q_ENU_ECEF * state_ECEF.q_ECEF_B;  // Actually q_ENU_B
+
+    // Biases remain the same
+    state_ENU.b_a = state_ECEF.b_a;
+    state_ENU.b_g = state_ECEF.b_g;
+
+    return state_ENU;
 }
 
-Eigen::Matrix<double, 15, 15> UKF::scaleCovariance(
-    const Eigen::Matrix<double, 15, 15>& P_unscaled) const {
+State UKF::enuToEcef(const State& state_ENU) const {
+    State state_ECEF;
 
-    Eigen::Matrix<double, 15, 15> P_scaled = P_unscaled;
+    // Position: convert from ENU to ECEF
+    Eigen::Vector3d delta_ENU = state_ENU.p_ECEF;  // Actually p_ENU
 
-    // Scale position covariance
-    P_scaled.block<3,3>(0,0) /= (POS_SCALE * POS_SCALE);
+    // Debug output disabled
 
-    // Scale velocity covariance
-    P_scaled.block<3,3>(3,3) /= (VEL_SCALE * VEL_SCALE);
+    state_ECEF.p_ECEF = enu_anchor_ECEF_ + R_ECEF_ENU_ * delta_ENU;
 
-    // Scale cross-covariances
-    P_scaled.block<3,3>(0,3) /= (POS_SCALE * VEL_SCALE);
-    P_scaled.block<3,3>(3,0) /= (POS_SCALE * VEL_SCALE);
+    // Velocity: rotate to ECEF frame
+    state_ECEF.v_ECEF = R_ECEF_ENU_ * state_ENU.v_ECEF;  // From v_ENU
 
-    // Position-attitude cross covariance
-    P_scaled.block<3,3>(0,6) /= POS_SCALE;
-    P_scaled.block<3,3>(6,0) /= POS_SCALE;
+    // Quaternion: remove ENU rotation
+    // q_ECEF_B = q_ECEF_ENU * q_ENU_B
+    Eigen::Quaterniond q_ECEF_ENU(R_ECEF_ENU_);
+    state_ECEF.q_ECEF_B = q_ECEF_ENU * state_ENU.q_ECEF_B;  // From q_ENU_B
 
-    // Velocity-attitude cross covariance
-    P_scaled.block<3,3>(3,6) /= VEL_SCALE;
-    P_scaled.block<3,3>(6,3) /= VEL_SCALE;
+    // Biases remain the same
+    state_ECEF.b_a = state_ENU.b_a;
+    state_ECEF.b_g = state_ENU.b_g;
 
-    // Position-bias cross covariance
-    P_scaled.block<3,3>(0,9) /= POS_SCALE;
-    P_scaled.block<3,3>(9,0) /= POS_SCALE;
-    P_scaled.block<3,3>(0,12) /= POS_SCALE;
-    P_scaled.block<3,3>(12,0) /= POS_SCALE;
-
-    // Velocity-bias cross covariance
-    P_scaled.block<3,3>(3,9) /= VEL_SCALE;
-    P_scaled.block<3,3>(9,3) /= VEL_SCALE;
-    P_scaled.block<3,3>(3,12) /= VEL_SCALE;
-    P_scaled.block<3,3>(12,3) /= VEL_SCALE;
-
-    return P_scaled;
+    return state_ECEF;
 }
 
-Eigen::Matrix<double, 15, 15> UKF::unscaleCovariance(
-    const Eigen::Matrix<double, 15, 15>& P_scaled) const {
+void UKF::checkAndReanchor() {
+    if (!use_enu_) return;
 
-    Eigen::Matrix<double, 15, 15> P_unscaled = P_scaled;
+    // Check if position has drifted too far from anchor
+    double drift = nominal_state_.p_ECEF.norm();  // p_ECEF is actually p_ENU
 
-    // Unscale position covariance
-    P_unscaled.block<3,3>(0,0) *= (POS_SCALE * POS_SCALE);
+    if (drift > ENU_REANCHOR_THRESHOLD) {
+        std::cout << "Re-anchoring ENU frame (drift: " << drift << "m)\n";
 
-    // Unscale velocity covariance
-    P_unscaled.block<3,3>(3,3) *= (VEL_SCALE * VEL_SCALE);
+        // Convert to ECEF
+        State state_ECEF = enuToEcef(nominal_state_);
 
-    // Unscale cross-covariances
-    P_unscaled.block<3,3>(0,3) *= (POS_SCALE * VEL_SCALE);
-    P_unscaled.block<3,3>(3,0) *= (POS_SCALE * VEL_SCALE);
+        // Re-anchor at current position
+        initializeEnu(state_ECEF.p_ECEF);
 
-    // Position-attitude cross covariance
-    P_unscaled.block<3,3>(0,6) *= POS_SCALE;
-    P_unscaled.block<3,3>(6,0) *= POS_SCALE;
+        // Convert back to new ENU
+        nominal_state_ = ecefToEnu(state_ECEF);
 
-    // Velocity-attitude cross covariance
-    P_unscaled.block<3,3>(3,6) *= VEL_SCALE;
-    P_unscaled.block<3,3>(6,3) *= VEL_SCALE;
-
-    // Position-bias cross covariance
-    P_unscaled.block<3,3>(0,9) *= POS_SCALE;
-    P_unscaled.block<3,3>(9,0) *= POS_SCALE;
-    P_unscaled.block<3,3>(0,12) *= POS_SCALE;
-    P_unscaled.block<3,3>(12,0) *= POS_SCALE;
-
-    // Velocity-bias cross covariance
-    P_unscaled.block<3,3>(3,9) *= VEL_SCALE;
-    P_unscaled.block<3,3>(9,3) *= VEL_SCALE;
-    P_unscaled.block<3,3>(3,12) *= VEL_SCALE;
-    P_unscaled.block<3,3>(12,3) *= VEL_SCALE;
-
-    return P_unscaled;
+        // Covariance remains valid in the new frame
+    }
 }

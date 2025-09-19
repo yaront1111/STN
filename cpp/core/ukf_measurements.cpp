@@ -177,7 +177,14 @@ void UKFMeasurements::updateMeasurementInternal(
     std::cout << "Measurement update accepted (NIS=" << nis << ")\n";
 }
 
-void UKFMeasurements::updateGravityGradient(const Eigen::Matrix3d& measured, const Eigen::Matrix3d& R) {
+void UKFMeasurements::updateGravityGradient(const Eigen::Matrix3d& measured_ecef, const Eigen::Matrix3d& R) {
+    // Transform measured tensor to ENU if needed
+    Eigen::Matrix3d measured = measured_ecef;
+    if (ukf_.use_enu_) {
+        // Transform measured gradient from ECEF to ENU frame
+        measured = ukf_.R_ECEF_ENU_.transpose() * measured_ecef * ukf_.R_ECEF_ENU_;
+    }
+
     // Convert 3x3 matrix to 9D vector for measurement update
     Eigen::VectorXd measured_vec = flattenMatrix(measured);
     Eigen::Matrix<double, 9, 9> noise_cov = Eigen::Matrix<double, 9, 9>::Zero();
@@ -186,8 +193,10 @@ void UKFMeasurements::updateGravityGradient(const Eigen::Matrix3d& measured, con
     // Use the average of the R matrix diagonal as the noise level
     double noise_level = R.trace() / 3.0;
 
-    // Ensure minimum noise for numerical stability
-    noise_level = std::max(noise_level, 1e-10);
+    // CRITICAL FIX: Ensure reasonable minimum noise for numerical stability
+    // Gravity gradients are typically measured in Eötvös (1E = 10^-9 s^-2)
+    // Minimum noise of 1 Eötvös squared is reasonable
+    noise_level = std::max(noise_level, 1.0);  // Changed from 1e-10 to 1.0
 
     for (int i = 0; i < 9; ++i) {
         noise_cov(i, i) = noise_level;  // Use same noise for all components
@@ -307,11 +316,38 @@ Eigen::Matrix3d UKFMeasurements::predictGravityGradient(const State& state) cons
             }
             initialized = true;
         }
-        auto result = static_provider.getGradient(state.p_ECEF);
+
+        // CRITICAL FIX: Transform to ECEF if in ENU mode
+        State state_ecef = state;
+        if (ukf_.use_enu_) {
+            state_ecef = ukf_.enuToEcef(state);
+        }
+
+        auto result = static_provider.getGradient(state_ecef.p_ECEF);
+
+        // Transform gradient tensor to ENU frame if needed
+        if (ukf_.use_enu_) {
+            // Rotate gradient tensor from ECEF to ENU frame
+            result.T = ukf_.R_ECEF_ENU_.transpose() * result.T * ukf_.R_ECEF_ENU_;
+        }
+
         return result.T;
     }
 
-    auto result = gravity_provider_->getGradient(state.p_ECEF);
+    // CRITICAL FIX: Transform to ECEF if in ENU mode
+    State state_ecef = state;
+    if (ukf_.use_enu_) {
+        state_ecef = ukf_.enuToEcef(state);
+    }
+
+    auto result = gravity_provider_->getGradient(state_ecef.p_ECEF);
+
+    // Transform gradient tensor to ENU frame if needed
+    if (ukf_.use_enu_) {
+        // Rotate gradient tensor from ECEF to ENU frame
+        result.T = ukf_.R_ECEF_ENU_.transpose() * result.T * ukf_.R_ECEF_ENU_;
+    }
+
     return result.T;
 }
 

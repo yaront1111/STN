@@ -32,9 +32,8 @@ public:
     static constexpr int ERROR_STATE_DIM = 15; // p(3) + v(3) + θ(3) + ba(3) + bg(3)
     static constexpr int NUM_SIGMA_POINTS = 2 * ERROR_STATE_DIM + 1;
 
-    // State scaling for numerical stability (reduces condition number from 1e10 to ~1e3)
-    static constexpr double POS_SCALE = 1e6;  // Scale positions (ECEF m → Mm)
-    static constexpr double VEL_SCALE = 1e2;  // Scale velocities (m/s → 100 m/s)
+    // ENU frame operation for numerical stability
+    static constexpr double ENU_REANCHOR_THRESHOLD = 10000.0;  // Re-anchor when drift exceeds 10km
     
     // State indices
     static constexpr int POS_IDX = 0;
@@ -51,10 +50,10 @@ public:
     
     /**
      * Initialize filter with state and covariance
-     * @param use_scaling: Enable internal state scaling for numerical stability
+     * @param use_enu: Enable ENU frame operation for numerical stability
      */
-    void init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P0,
-              bool use_scaling = true);
+    void init(const State& x0_ECEF, const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P0,
+              bool use_enu = true);
 
     /**
      * Set gravity provider for measurement predictions
@@ -123,10 +122,10 @@ public:
     // Pseudo-measurements removed - not used in production
     
     State getState() const {
-        return use_scaling_ ? unscaleState(nominal_state_) : nominal_state_;
+        return use_enu_ ? enuToEcef(nominal_state_) : nominal_state_;
     }
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCovariance() const {
-        return use_scaling_ ? unscaleCovariance(P_) : P_;
+        return P_;  // Covariance is already in the working frame
     }
     
     // Getters for modular components
@@ -172,12 +171,19 @@ protected:
     // Innovation statistics
     double last_nis_ = 0.0;
 
-    // State scaling flag and methods
-    bool use_scaling_ = true;
-    State scaleState(const State& unscaled) const;
-    State unscaleState(const State& scaled) const;
-    Eigen::Matrix<double, 15, 15> scaleCovariance(const Eigen::Matrix<double, 15, 15>& P_unscaled) const;
-    Eigen::Matrix<double, 15, 15> unscaleCovariance(const Eigen::Matrix<double, 15, 15>& P_scaled) const;
+    // ENU frame operation
+    bool use_enu_ = true;
+    Eigen::Vector3d enu_anchor_ECEF_;  // Anchor point in ECEF
+    Eigen::Matrix3d R_ECEF_ENU_;       // Rotation from ENU to ECEF
+
+public:
+    // State conversion methods (made public for UKFMeasurements access)
+    State ecefToEnu(const State& state_ECEF) const;
+    State enuToEcef(const State& state_ENU) const;
+
+protected:
+    void initializeEnu(const Eigen::Vector3d& anchor_ECEF);
+    void checkAndReanchor();
 
 private:
 

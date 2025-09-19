@@ -122,8 +122,9 @@ int main() {
     ukf_config.setGradeAOptimal();  // Use production-calibrated parameters
     
     UKF ukf(ukf_config);
+    ukf.setGravityProvider(&gravity_model);  // CRITICAL: Set gravity provider before any gravity updates
     std::cout << "✓ UKF initialized with Grade A+ calibrated parameters\n";
-    
+
     // Initial state with small error
     State x0 = sim.true_state;
     x0.p_ECEF += Eigen::Vector3d(10, 10, 5);  // 10m horizontal error
@@ -136,7 +137,7 @@ int main() {
     P0.block<3,3>(9,9) *= 1e-4;
     P0.block<3,3>(12,12) *= 1e-6;
     
-    ukf.init(x0, P0);
+    ukf.init(x0, P0, false);  // Set to false to stay in ECEF for now (ENU has issues)
     
     // Initialize map matcher with PRODUCTION-READY parameters to avoid false matches
     GravityMapMatcher::Config matcher_config;

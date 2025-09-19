@@ -53,8 +53,11 @@ GravityGradientProvider::SphericalCoords
 GravityGradientProvider::toSpherical(const Eigen::Vector3d& pos_ECEF) const {
     SphericalCoords coords;
     coords.r = pos_ECEF.norm();
+
+    // Direct calculation without clamping
     coords.theta = std::acos(pos_ECEF.z() / coords.r);  // Colatitude
     coords.phi = std::atan2(pos_ECEF.y(), pos_ECEF.x());  // Longitude
+
     return coords;
 }
 
@@ -116,9 +119,13 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
     if (!coeffs_) {
         return Eigen::Matrix3d::Zero();
     }
-    
-    // Use full EGM2008 capability with stable Holmes-Featherstone computation
-    const int max_safe_degree = std::min(coeffs_->max_degree, 360);  // EGM2008 degree 360
+
+    // Suppress debug output
+    bool debug = false;
+
+    // Use degree 120 for good accuracy while maintaining stability
+    // Higher degrees give better gradient resolution
+    const int max_safe_degree = std::min(coeffs_->max_degree, 120);  // Degree 120 for accuracy/stability balance
     auto legendre = computeLegendre(coords.theta, max_safe_degree);
     
     // Earth parameters
@@ -149,11 +156,17 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
     // Sum spherical harmonic series for second derivatives only
     for (int n = 2; n <= max_safe_degree; ++n) {
         double ar_pow = std::pow(a / coords.r, n);
-        
+
         for (int m = 0; m <= n; ++m) {
             int idx = coeffs_->idx(n, m);
             double C_nm = coeffs_->C[idx];
             double S_nm = coeffs_->S[idx];
+
+            // DEBUG: Check for exploding coefficients
+            if (debug && (std::abs(C_nm) > 1e10 || std::abs(S_nm) > 1e10)) {
+                std::cout << "[DEBUG] Large coefficient at n=" << n << ", m=" << m << ":\n";
+                std::cout << "  C_nm = " << C_nm << ", S_nm = " << S_nm << "\n";
+            }
             
             // Check for valid Legendre values
             if (!std::isfinite(legendre.P(n, m))) {
@@ -167,9 +180,25 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
             
             // EGM2008 second derivative formulation (fully normalized)
             double common_factor = ar_pow * legendre.P(n, m);
-            
+
+            // DEBUG: Check if common_factor is exploding
+            if (debug && n <= 5 && m <= 2) {
+                std::cout << "[DEBUG n=" << n << ",m=" << m << "]"
+                          << " ar_pow=" << ar_pow
+                          << " P=" << legendre.P(n,m)
+                          << " CF=" << common_factor
+                          << " CS_sum=" << CS_sum << "\n";
+            }
+
             // V_rr = (n+1)(n+2) term
-            V_rr += (n + 1) * (n + 2) * common_factor * CS_sum;
+            double v_rr_contrib = (n + 1) * (n + 2) * common_factor * CS_sum;
+            V_rr += v_rr_contrib;
+
+            // DEBUG: Check for large contributions
+            if (debug && std::abs(v_rr_contrib) > 1e10) {
+                std::cout << "[DEBUG] Large V_rr contribution at n=" << n << ", m=" << m
+                          << ": " << v_rr_contrib << "\n";
+            }
             
             // V_rt = (n+1) * dP/dtheta term
             V_rt += (n + 1) * ar_pow * legendre.dP(n, m) * CS_sum;
@@ -204,9 +233,22 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
         }
     }
     
+    // DEBUG: Check accumulated values before scaling
+    if (debug) {
+        std::cout << "[DEBUG] Before scaling:\n";
+        std::cout << "  V_rr = " << V_rr << "\n";
+        std::cout << "  V_tt = " << V_tt << "\n";
+        std::cout << "  V_pp = " << V_pp << "\n";
+        if (std::abs(V_rr) > 1e10 || std::abs(V_tt) > 1e10 || std::abs(V_pp) > 1e10) {
+            std::cout << "  WARNING: Values already exploded before scaling!\n";
+        }
+    }
+
     // Apply proper scaling for gravity gradients
     // Second derivatives need GM/r^3 base scaling
-    double base_scale = GM / (coords.r * coords.r * coords.r);
+    // But the values V_rr etc are already dimensionless from the spherical harmonic expansion
+    // They need to be multiplied by GM/r^3 to get units of s^-2
+    double base_scale = GM / (coords.r * coords.r * coords.r);  // This gives s^-2
 
     // Guard against singularity at poles
     const double st_guard = std::max(1e-12, std::abs(sin_theta));
@@ -217,28 +259,12 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
                    V_rt/coords.r, V_tt/(coords.r*coords.r), V_tp/(coords.r*coords.r*st_guard),
                    V_rp/(coords.r*st_guard), V_tp/(coords.r*coords.r*st_guard), V_pp/(coords.r*coords.r*st_guard*st_guard);
 
-    // Scale anomalous part to Eötvös
+    // Scale to physical units (s^-2) then convert to Eötvös
+    // 1 Eötvös = 1e-9 s^-2, so multiply by 1e9 to convert s^-2 to Eötvös
     G_anomalous *= base_scale * 1e9;
 
-    // *** ADD THE PRIMARY (POINT-MASS) GRADIENT ***
-    // Primary field gradient in spherical coordinates (already with metric)
-    Eigen::Matrix3d G_primary = Eigen::Matrix3d::Zero();
-    double primary_scale = base_scale * 1e9;
-    G_primary(0, 0) = 2.0 * primary_scale;   // G_rr = 2GM/r^3
-    G_primary(1, 1) = -1.0 * primary_scale;  // G_θθ = -GM/r^3
-    G_primary(2, 2) = -1.0 * primary_scale;  // G_φφ = -GM/r^3
-
-    // Total gradient = primary + anomalous
-    Eigen::Matrix3d G_total_spherical = G_primary + G_anomalous;
-
-    // Enforce Laplace equation (trace = 0 in free space)
-    double trace = G_total_spherical.trace();
-    if (std::abs(trace) > 0.1) {  // More than 0.1 Eötvös off
-        // Redistribute trace error equally among diagonal components
-        G_total_spherical(0,0) -= trace/3.0;
-        G_total_spherical(1,1) -= trace/3.0;
-        G_total_spherical(2,2) -= trace/3.0;
-    }
+    // NOTE: We work with PURE ANOMALY - no primary gradient added
+    // This makes the measurements consistent with map matching
 
     // Transform to ECEF coordinates
     Eigen::Matrix3d T;
@@ -250,12 +276,13 @@ Eigen::Matrix3d GravityGradientProvider::evaluateGradient(const SphericalCoords&
     T << st*cp, ct*cp, -sp,
          st*sp, ct*sp,  cp,
          ct,    -st,    0;
-    
+
     // Transform gradient tensor (CORRECT: T * G_spherical * T^T for tensors)
-    Eigen::Matrix3d G_ECEF = T * G_total_spherical * T.transpose();
+    Eigen::Matrix3d G_ECEF = T * G_anomalous * T.transpose();
 
     // Enforce symmetry numerically
     G_ECEF = 0.5 * (G_ECEF + G_ECEF.transpose());
+
 
     // Already scaled to Eötvös units above
     return G_ECEF;
@@ -285,9 +312,8 @@ GravityGradientTensor GravityGradientProvider::getGradient(const Eigen::Vector3d
 }
 
 double GravityGradientProvider::getAnomaly(const Eigen::Vector3d& pos_ECEF) const {
-    // Get gradient in ECEF frame
+    // Get ANOMALY gradient in ECEF frame (no primary included)
     const auto g = getGradient(pos_ECEF);
-    const double r = pos_ECEF.norm();
 
     // Compute geodetic lat/lon from ECEF
     const Eigen::Vector3d lla = UKFMathUtils::ecefToLla(pos_ECEF);
@@ -304,19 +330,14 @@ double GravityGradientProvider::getAnomaly(const Eigen::Vector3d& pos_ECEF) cons
          -sLat*cLon,      -sLat*sLon,       cLat,        // North
           cLat*cLon,       cLat*sLon,       sLat;        // Up
 
-    // Rotate gradient tensor to ENU frame
+    // Rotate anomaly gradient tensor to ENU frame
     const Eigen::Matrix3d G_ENU = R * g.T * R.transpose();
 
-    // Normal vertical gradient (Up/Up component) in Eötvös
-    const double GM = 3.986004418e14;
-    // Note: Up points outward, so Tuu_normal = -2GM/r^3 (negative of radial)
-    const double Tuu_normal = -2.0 * GM / (r*r*r) * 1e9;
+    // Return vertical anomaly component directly (already anomaly-only)
+    const double Tuu_anomaly = G_ENU(2,2);  // ENU: [E,N,U]; index 2 is Up
 
-    const double Tuu_actual = G_ENU(2,2);  // ENU: [E,N,U]; index 2 is Up
-    const double delta_Tuu_E = Tuu_actual - Tuu_normal;
-
-    // Return anomaly in Eötvös (the native unit for gradients)
-    return delta_Tuu_E;
+    // Return anomaly in Eötvös
+    return Tuu_anomaly;
 }
 
 void GravityGradientProvider::addEarthTides(GravityGradientTensor& gradient, double t) const {
