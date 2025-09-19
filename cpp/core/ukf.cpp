@@ -50,9 +50,17 @@ void UKF::computeWeights() {
     }
 }
 
-void UKF::init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P0) {
-    nominal_state_ = x0;
-    P_ = P0;
+void UKF::init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P0, bool use_scaling) {
+    use_scaling_ = use_scaling;
+
+    if (use_scaling_) {
+        // Scale the initial state and covariance for better conditioning
+        nominal_state_ = scaleState(x0);
+        P_ = scaleCovariance(P0);
+    } else {
+        nominal_state_ = x0;
+        P_ = P0;
+    }
     UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_);
 }
 
@@ -253,3 +261,103 @@ void UKF::updateTerrainAltitude(double radar_alt, double terrain_height, double 
 // These were not used in production and have been removed to clean up the codebase
 
 // updateScalarPseudo also removed - not used
+
+// ============================================================================
+// State Scaling Methods for Numerical Stability
+// ============================================================================
+
+State UKF::scaleState(const State& unscaled) const {
+    State scaled;
+    scaled.p_ECEF = unscaled.p_ECEF / POS_SCALE;  // Scale position to ~1
+    scaled.v_ECEF = unscaled.v_ECEF / VEL_SCALE;  // Scale velocity to ~1
+    scaled.q_ECEF_B = unscaled.q_ECEF_B;          // Quaternions unchanged
+    scaled.b_a = unscaled.b_a;                    // Biases unchanged
+    scaled.b_g = unscaled.b_g;
+    return scaled;
+}
+
+State UKF::unscaleState(const State& scaled) const {
+    State unscaled;
+    unscaled.p_ECEF = scaled.p_ECEF * POS_SCALE;  // Unscale position
+    unscaled.v_ECEF = scaled.v_ECEF * VEL_SCALE;  // Unscale velocity
+    unscaled.q_ECEF_B = scaled.q_ECEF_B;
+    unscaled.b_a = scaled.b_a;
+    unscaled.b_g = scaled.b_g;
+    return unscaled;
+}
+
+Eigen::Matrix<double, 15, 15> UKF::scaleCovariance(
+    const Eigen::Matrix<double, 15, 15>& P_unscaled) const {
+
+    Eigen::Matrix<double, 15, 15> P_scaled = P_unscaled;
+
+    // Scale position covariance
+    P_scaled.block<3,3>(0,0) /= (POS_SCALE * POS_SCALE);
+
+    // Scale velocity covariance
+    P_scaled.block<3,3>(3,3) /= (VEL_SCALE * VEL_SCALE);
+
+    // Scale cross-covariances
+    P_scaled.block<3,3>(0,3) /= (POS_SCALE * VEL_SCALE);
+    P_scaled.block<3,3>(3,0) /= (POS_SCALE * VEL_SCALE);
+
+    // Position-attitude cross covariance
+    P_scaled.block<3,3>(0,6) /= POS_SCALE;
+    P_scaled.block<3,3>(6,0) /= POS_SCALE;
+
+    // Velocity-attitude cross covariance
+    P_scaled.block<3,3>(3,6) /= VEL_SCALE;
+    P_scaled.block<3,3>(6,3) /= VEL_SCALE;
+
+    // Position-bias cross covariance
+    P_scaled.block<3,3>(0,9) /= POS_SCALE;
+    P_scaled.block<3,3>(9,0) /= POS_SCALE;
+    P_scaled.block<3,3>(0,12) /= POS_SCALE;
+    P_scaled.block<3,3>(12,0) /= POS_SCALE;
+
+    // Velocity-bias cross covariance
+    P_scaled.block<3,3>(3,9) /= VEL_SCALE;
+    P_scaled.block<3,3>(9,3) /= VEL_SCALE;
+    P_scaled.block<3,3>(3,12) /= VEL_SCALE;
+    P_scaled.block<3,3>(12,3) /= VEL_SCALE;
+
+    return P_scaled;
+}
+
+Eigen::Matrix<double, 15, 15> UKF::unscaleCovariance(
+    const Eigen::Matrix<double, 15, 15>& P_scaled) const {
+
+    Eigen::Matrix<double, 15, 15> P_unscaled = P_scaled;
+
+    // Unscale position covariance
+    P_unscaled.block<3,3>(0,0) *= (POS_SCALE * POS_SCALE);
+
+    // Unscale velocity covariance
+    P_unscaled.block<3,3>(3,3) *= (VEL_SCALE * VEL_SCALE);
+
+    // Unscale cross-covariances
+    P_unscaled.block<3,3>(0,3) *= (POS_SCALE * VEL_SCALE);
+    P_unscaled.block<3,3>(3,0) *= (POS_SCALE * VEL_SCALE);
+
+    // Position-attitude cross covariance
+    P_unscaled.block<3,3>(0,6) *= POS_SCALE;
+    P_unscaled.block<3,3>(6,0) *= POS_SCALE;
+
+    // Velocity-attitude cross covariance
+    P_unscaled.block<3,3>(3,6) *= VEL_SCALE;
+    P_unscaled.block<3,3>(6,3) *= VEL_SCALE;
+
+    // Position-bias cross covariance
+    P_unscaled.block<3,3>(0,9) *= POS_SCALE;
+    P_unscaled.block<3,3>(9,0) *= POS_SCALE;
+    P_unscaled.block<3,3>(0,12) *= POS_SCALE;
+    P_unscaled.block<3,3>(12,0) *= POS_SCALE;
+
+    // Velocity-bias cross covariance
+    P_unscaled.block<3,3>(3,9) *= VEL_SCALE;
+    P_unscaled.block<3,3>(9,3) *= VEL_SCALE;
+    P_unscaled.block<3,3>(3,12) *= VEL_SCALE;
+    P_unscaled.block<3,3>(12,3) *= VEL_SCALE;
+
+    return P_unscaled;
+}

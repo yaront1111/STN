@@ -31,6 +31,10 @@ public:
     static constexpr int FULL_STATE_DIM = 16;  // p(3) + v(3) + q(4) + ba(3) + bg(3)
     static constexpr int ERROR_STATE_DIM = 15; // p(3) + v(3) + θ(3) + ba(3) + bg(3)
     static constexpr int NUM_SIGMA_POINTS = 2 * ERROR_STATE_DIM + 1;
+
+    // State scaling for numerical stability (reduces condition number from 1e10 to ~1e3)
+    static constexpr double POS_SCALE = 1e6;  // Scale positions (ECEF m → Mm)
+    static constexpr double VEL_SCALE = 1e2;  // Scale velocities (m/s → 100 m/s)
     
     // State indices
     static constexpr int POS_IDX = 0;
@@ -47,8 +51,10 @@ public:
     
     /**
      * Initialize filter with state and covariance
+     * @param use_scaling: Enable internal state scaling for numerical stability
      */
-    void init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P0);
+    void init(const State& x0, const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P0,
+              bool use_scaling = true);
 
     /**
      * Set gravity provider for measurement predictions
@@ -116,8 +122,12 @@ public:
      */
     // Pseudo-measurements removed - not used in production
     
-    State getState() const { return nominal_state_; }
-    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCovariance() const { return P_; }
+    State getState() const {
+        return use_scaling_ ? unscaleState(nominal_state_) : nominal_state_;
+    }
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCovariance() const {
+        return use_scaling_ ? unscaleCovariance(P_) : P_;
+    }
     
     // Getters for modular components
     const Eigen::VectorXd& getWeightsMean() const { return weights_mean_; }
@@ -137,25 +147,40 @@ public:
     bool isFilterHealthy() const { 
         return integrity_stats_.nees_pass_rate > 0.7 && integrity_stats_.nis_pass_rate > 0.7; 
     }
-    
-private:
+
+protected:
     // Nominal state (16D with quaternion)
     State nominal_state_;
-    
+
     // Error-state covariance (15x15)
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_;
-    
+
     // UKF configuration and parameters
     UKFConfig cfg_;
     double lambda_;
     Eigen::VectorXd weights_mean_;
     Eigen::VectorXd weights_cov_;
-    
+
     // Modular components (using unique_ptr)
     std::unique_ptr<UKFSigmaPoints> sigma_points_manager_;
     std::unique_ptr<UKFMeasurements> measurements_manager_;
     GravityGradientProvider* gravity_provider_ = nullptr;  // Non-owning pointer
-    
+
+    // Process noise matrix
+    Eigen::Matrix<double, 15, 15> Q_;
+
+    // Innovation statistics
+    double last_nis_ = 0.0;
+
+    // State scaling flag and methods
+    bool use_scaling_ = true;
+    State scaleState(const State& unscaled) const;
+    State unscaleState(const State& scaled) const;
+    Eigen::Matrix<double, 15, 15> scaleCovariance(const Eigen::Matrix<double, 15, 15>& P_unscaled) const;
+    Eigen::Matrix<double, 15, 15> unscaleCovariance(const Eigen::Matrix<double, 15, 15>& P_scaled) const;
+
+private:
+
     // Filter integrity monitoring using IntegrityMonitor
     IntegrityMonitor::Stats integrity_stats_;
     

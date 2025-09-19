@@ -350,3 +350,14 @@ Eigen::Matrix<double, 15, 1> UKFMathUtils::computeErrorVector(const State& state
 }
 
 // Template specializations for dynamic matrices are not needed since we use direct solvers
+template <int Size>
+double UKFMathUtils::computeConditionNumber(const Eigen::Matrix<double, Size, Size>& matrix) {
+    Eigen::JacobiSVD<Eigen::Matrix<double, Size, Size>> svd(matrix);
+    double max_singular = svd.singularValues().maxCoeff();
+    double min_singular = svd.singularValues().minCoeff();
+    if (min_singular < 1e-15) return 1e15;
+    return max_singular / min_singular;
+}
+// Explicit instantiation for condition number
+template double UKFMathUtils::computeConditionNumber<15>(
+    const Eigen::Matrix<double, 15, 15>& matrix);
