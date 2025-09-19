@@ -102,6 +102,15 @@ target_link_libraries(test_gps_denied_simple
     gravity_core
 )
 
+# Grade B+ performance test
+add_executable(test_grade_b_plus
+    test_grade_b_plus.cpp
+)
+
+target_link_libraries(test_grade_b_plus
+    gravity_core
+)
+
 
 # Installation
 install(TARGETS gravity_navigator

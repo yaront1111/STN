@@ -118,23 +118,59 @@ void UKFConfig::setGradeAOptimal() {
     std::cout << "UKF configured for Grade A+ performance\n";
 }
 
+void UKFConfig::setGradeBPlus() {
+    // Optimized for Grade B+ performance (<200m RMS)
+    setDefaults();
+
+    // UKF parameters tuned for stability
+    alpha = 0.001;    // Small but stable spread
+    beta = 2.0;       // Gaussian
+    kappa = 0.0;      // Standard
+
+    // Process noise - MINIMAL for GPS-denied dead reckoning
+    process_noise.position = 1e-6;      // 1 nm/s^1.5 - trust physics
+    process_noise.velocity = 1e-4;      // 0.1 mm/s^2.5 - high-quality IMU
+    process_noise.attitude = 1e-6;      // 1 μrad/s^1.5 - tactical grade
+    process_noise.accel_bias = 1e-9;    // Nearly zero drift
+    process_noise.gyro_bias = 1e-12;    // Nearly zero drift
+
+    // Measurement noise - realistic values
+    measurement_noise.gravity_gradient = 5.0;       // 5 Eötvös (achievable)
+    measurement_noise.gravity_anomaly = 0.5;        // 0.5 mGal (high-quality sensor)
+    measurement_noise.magnetometer = 50e-9;         // 50 nT
+    measurement_noise.barometer = 5.0;              // 5m altitude
+    measurement_noise.map_match_position = 50.0;    // 50m map accuracy
+
+    // Numerical stability
+    numerical.min_eigenvalue = 1e-10;
+    numerical.condition_threshold = 1e6;            // Tighter bound
+    numerical.innovation_outlier_chi2 = 6.635;      // 90% confidence
+
+    // Grade B+ specific
+    grade_a.max_position_error = 200.0;             // Grade B+ requirement
+    grade_a.map_match_interval = 10.0;              // More frequent matching
+    grade_a.min_gradient_measurements = 50;
+
+    std::cout << "UKF configured for Grade B+ performance (<200m RMS)\n";
+}
+
 void UKFConfig::setConservative() {
     // Start with defaults
     setDefaults();
-    
+
     // Conservative settings for numerical stability
     alpha = 0.0001;   // Very small sigma point spread
-    
+
     // Large process noise for stability
     process_noise.position = 1.0;
     process_noise.velocity = 0.1;
     process_noise.attitude = 0.01;
-    
+
     // Large measurement noise to avoid rejections
     measurement_noise.gravity_gradient = 10.0;
     measurement_noise.gravity_anomaly = 1000.0;
     measurement_noise.magnetometer = 0.2;
-    
+
     // Very strict numerical bounds
     numerical.min_eigenvalue = 1e-10;
     numerical.condition_threshold = 1e6;

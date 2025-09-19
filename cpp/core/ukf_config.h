@@ -63,6 +63,7 @@ struct UKFConfig {
     bool validate() const;
     void setDefaults();
     void setGradeAOptimal();  // Optimized settings for Grade A performance
+    void setGradeBPlus();     // Optimized settings for Grade B+ (<200m RMS)
     void setConservative();   // Conservative settings for stability
     void setAggressive();     // Aggressive settings for fast convergence
 };

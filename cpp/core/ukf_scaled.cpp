@@ -39,8 +39,29 @@ void ScaledUKF::init(const State& x0_physical,
     // Store physical state
     nominal_state_ = x0_physical;
 
-    // Transform covariance to scaled space
-    auto P_scaled = scaler_.scaleCovariance(P0_physical);
+    // FIX: Ensure P0 has proper values for ALL states (not identity!)
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P0_fixed = P0_physical;
+
+    // Check and fix any uninitialized (identity) diagonal values
+    for (int i = 0; i < ERROR_STATE_DIM; ++i) {
+        if (std::abs(P0_fixed(i,i) - 1.0) < 1e-6) {
+            // This diagonal was left at identity - set proper uncertainty
+            if (i < 3) {
+                P0_fixed(i,i) = 100.0;    // Position: (10m)^2
+            } else if (i < 6) {
+                P0_fixed(i,i) = 1.0;      // Velocity: (1m/s)^2
+            } else if (i < 9) {
+                P0_fixed(i,i) = 0.01;     // Attitude: (0.1 rad)^2
+            } else if (i < 12) {
+                P0_fixed(i,i) = 1e-6;     // Accel bias: (0.001 m/s²)^2
+            } else {
+                P0_fixed(i,i) = 1e-10;    // Gyro bias: (1e-5 rad/s)^2
+            }
+        }
+    }
+
+    // Transform fixed covariance to scaled space
+    auto P_scaled = scaler_.scaleCovariance(P0_fixed);
 
     // Check conditioning BEFORE Cholesky
     double cond_before = scaler_.computeConditionNumber(P0_physical);
@@ -69,12 +90,20 @@ void ScaledUKF::init(const State& x0_physical,
     }
 
     // Compute Cholesky factor in scaled space
-    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_scaled, 1e-9);
+    // Do NOT call enforcePositiveDefinite - it resets to tiny values inappropriate for scaled space!
+    // Instead, add small regularization
+    P_scaled += 1e-9 * Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
     Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
 
     if (llt.info() != Eigen::Success) {
         std::cerr << "ERROR: Failed to compute Cholesky factor of scaled covariance!\n";
         S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+        // Set reasonable uncertainties in SCALED space
+        S_.block<3,3>(0,0) *= 2.0;  // Position: 20m in physical = 2 in scaled
+        S_.block<3,3>(3,3) *= 1.0;  // Velocity: 1 m/s
+        S_.block<3,3>(6,6) *= 1.0;  // Attitude: 0.1 rad
+        S_.block<3,3>(9,9) *= 1.0;  // Accel bias
+        S_.block<3,3>(12,12) *= 1.0; // Gyro bias
     } else {
         S_ = llt.matrixL();
         std::cout << "\n✓ Cholesky factorization successful in scaled space\n";
@@ -85,6 +114,14 @@ void ScaledUKF::init(const State& x0_physical,
 
 void ScaledUKF::generateSigmaPoints() {
     // CRITICAL: Generate sigma points with proper boundary transformations
+
+    // Check if S_ contains NaN or Inf
+    if (S_.hasNaN() || !S_.allFinite()) {
+        std::cerr << "ERROR: S_ contains NaN or Inf values!\n";
+        std::cerr << "S_ diagonal: " << S_.diagonal().transpose() << "\n";
+        // Reset to safe values
+        S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+    }
 
     // Central sigma point (no error)
     sigma_points_[0].state = nominal_state_;
@@ -111,6 +148,14 @@ void ScaledUKF::generateSigmaPoints() {
 }
 
 void ScaledUKF::predict(const ImuSample& imu, double dt) {
+    // Debug: Check nominal state before prediction
+    if (!nominal_state_.p_ECEF.allFinite() || !nominal_state_.v_ECEF.allFinite()) {
+        std::cerr << "ERROR: NaN in nominal_state_ at start of predict!\n";
+        std::cerr << "Nominal position: " << nominal_state_.p_ECEF.transpose() << "\n";
+        std::cerr << "Nominal velocity: " << nominal_state_.v_ECEF.transpose() << "\n";
+        return;
+    }
+
     // Step 1: Generate sigma points with boundary transformation
     generateSigmaPoints();
 
@@ -195,9 +240,15 @@ void ScaledUKF::reconstructScaledCovariance(const std::vector<State>& propagated
                 eigenvalues.array().sqrt().matrix().asDiagonal();
             S_ = V * sqrt_D;
         } else {
-            // Critical failure - reset to identity
+            // Critical failure - reset to reasonable scaled values
             std::cerr << "CRITICAL: Failed to factorize scaled covariance!" << std::endl;
             S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+            // Set reasonable uncertainties in SCALED space
+            S_.block<3,3>(0,0) *= 2.0;  // Position: 20m in physical = 2 in scaled
+            S_.block<3,3>(3,3) *= 1.0;  // Velocity: 1 m/s
+            S_.block<3,3>(6,6) *= 1.0;  // Attitude: 0.1 rad
+            S_.block<3,3>(9,9) *= 1.0;  // Accel bias
+            S_.block<3,3>(12,12) *= 1.0; // Gyro bias
         }
     }
 
@@ -255,6 +306,15 @@ void ScaledUKF::addProcessNoiseScaled(double dt) {
 }
 
 State ScaledUKF::propagateState(const State& state, const ImuSample& imu, double dt) const {
+    // Check for NaN in input state
+    if (!state.p_ECEF.allFinite() || !state.v_ECEF.allFinite()) {
+        std::cerr << "ERROR: NaN in input state to propagateState!\n";
+        std::cerr << "Position: " << state.p_ECEF.transpose() << "\n";
+        std::cerr << "Velocity: " << state.v_ECEF.transpose() << "\n";
+        // Return unchanged state to prevent further corruption
+        return state;
+    }
+
     // Standard state propagation (physical units)
     // This is the same as any UKF implementation
 
@@ -353,12 +413,27 @@ void ScaledUKF::monitorHealth() const {
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = S_ * S_.transpose();
     double cond = scaler_.computeConditionNumber(P_scaled);
 
-    if (cond > last_condition_number_ * 10) {
+    // CRITICAL: If condition number is too high, reset covariance
+    if (cond > 1e8 || std::isinf(cond) || std::isnan(cond)) {
+        std::cout << "CRITICAL: Resetting covariance due to poor conditioning: " << cond << "\n";
+
+        // Reset to well-conditioned diagonal matrix
+        const_cast<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>&>(S_) =
+            Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+
+        // Reset divergence count
+        const_cast<int&>(divergence_count_) = 0;
+        const_cast<double&>(last_condition_number_) = 1.0;
+        return;
+    }
+
+    if (cond > last_condition_number_ * 10 && cond > 1e4) {
         std::cout << "WARNING: Condition number degrading rapidly: "
-                 << last_condition_number_ << " -> " << cond << "\n";
+                 << std::scientific << last_condition_number_ << " -> " << cond << "\n";
         divergence_count_++;
-    } else {
-        divergence_count_ = 0;
+    } else if (cond < last_condition_number_ * 0.5) {
+        // Improving - reduce divergence count
+        if (divergence_count_ > 0) divergence_count_--;
     }
 
     last_condition_number_ = cond;
@@ -495,9 +570,29 @@ void ScaledUKF::updateGradient(const Eigen::Matrix3d& measured_gradient, const E
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> I_KH =
         Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
 
-    // Simplified: Just reduce uncertainty slightly (gradient provides weak observability)
-    // In practice, would compute full Joseph form update
-    S_ *= 0.999;  // Very small reduction in uncertainty
+    // Perform Joseph form update for numerical stability
+    // P+ = (I - K*H) * P * (I - K*H)' + K*R*K'
+
+    // Approximate H matrix (measurement Jacobian)
+    Eigen::Matrix<double, 9, ERROR_STATE_DIM> H_approx = Eigen::Matrix<double, 9, ERROR_STATE_DIM>::Zero();
+    // Gradient is most sensitive to position
+    H_approx.block<9, 3>(0, 0) = Eigen::Matrix<double, 9, 3>::Identity() * 0.1;  // Position sensitivity
+
+    // Transform K to scaled space (reuse existing variable)
+    K_scaled = scaler_.getInverseScalingMatrix() * K;
+
+    // Joseph form in scaled space (reuse existing variable)
+    I_KH = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() - K_scaled * H_approx;
+
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = S_ * S_.transpose();
+    P_scaled = I_KH * P_scaled * I_KH.transpose() + K_scaled * R_flat * K_scaled.transpose();
+
+    // Recompute Cholesky factor
+    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_scaled, 1e-9);
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
+    if (llt.info() == Eigen::Success) {
+        S_ = llt.matrixL();
+    }
 }
 
 void ScaledUKF::updateAnomaly(double measured_anomaly_mgal, double noise_mgal) {
@@ -551,11 +646,29 @@ void ScaledUKF::updateAnomaly(double measured_anomaly_mgal, double noise_mgal) {
     nominal_state_ = applyErrorPhysical(nominal_state_, dx_physical);
 
     // Covariance update in scaled space
+    // Joseph form update for anomaly measurement
+    Eigen::Matrix<double, 1, ERROR_STATE_DIM> H_scalar = Eigen::Matrix<double, 1, ERROR_STATE_DIM>::Zero();
+    H_scalar(0, 0) = 0.05;  // Position sensitivity in x
+    H_scalar(0, 1) = 0.05;  // Position sensitivity in y
+    H_scalar(0, 2) = 0.01;  // Position sensitivity in z
+
     // Transform to scaled space
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> K_scaled = scaler_.getInverseScalingMatrix() * K;
 
-    // Simplified: Small reduction in uncertainty (anomaly provides moderate observability)
-    S_ *= 0.998;  // Small reduction
+    // Joseph form update
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> I_KH =
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() - K_scaled * H_scalar;
+
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = S_ * S_.transpose();
+    double R_scalar = noise_mgal * noise_mgal;
+    P_scaled = I_KH * P_scaled * I_KH.transpose() + K_scaled * K_scaled.transpose() * R_scalar;
+
+    // Recompute Cholesky factor
+    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_scaled, 1e-9);
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
+    if (llt.info() == Eigen::Success) {
+        S_ = llt.matrixL();
+    }
 }
 
 void ScaledUKF::updateMapMatch(const Eigen::Vector3d& matched_position_ECEF, double uncertainty_m) {
@@ -565,22 +678,38 @@ void ScaledUKF::updateMapMatch(const Eigen::Vector3d& matched_position_ECEF, dou
     // Position innovation
     Eigen::Vector3d innovation = matched_position_ECEF - nominal_state_.p_ECEF;
 
-    // Simple position update (could be more sophisticated)
-    // Apply 50% of the correction to avoid jumps
-    nominal_state_.p_ECEF += 0.5 * innovation;
+    // Compute Kalman gain based on uncertainty
+    double map_variance = uncertainty_m * uncertainty_m;
 
-    // Also correct velocity based on position error
-    // Assumes error accumulated over last 10 seconds
-    nominal_state_.v_ECEF += 0.05 * innovation;  // 5% velocity correction
+    // Get current position variance from covariance
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_current = S_ * S_.transpose();
+    double pos_variance = (P_current(0,0) + P_current(1,1) + P_current(2,2)) / 3.0;
+
+    // Optimal Kalman gain
+    double K_pos = pos_variance / (pos_variance + map_variance);
+    K_pos = std::min(0.95, K_pos);  // Cap at 95% to maintain some uncertainty
+
+    // Apply optimal correction
+    nominal_state_.p_ECEF += K_pos * innovation;
+
+    // Velocity correction based on time since last match (assume 10s)
+    double dt_match = 10.0;
+    double K_vel = 0.1 * K_pos;  // Smaller velocity correction
+    nominal_state_.v_ECEF += (K_vel * innovation) / dt_match;
 
     // Reduce position uncertainty significantly
     // Map matching provides strong position observability
     // Extract current covariance
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = S_ * S_.transpose();
 
-    // Reduce position uncertainty
-    P_scaled.block<3,3>(0,0) = P_scaled.block<3,3>(0,0) * 0.1;  // 90% reduction in position uncertainty
-    P_scaled.block<3,3>(3,3) = P_scaled.block<3,3>(3,3) * 0.5;  // 50% reduction in velocity uncertainty
+    // Reduce position uncertainty based on Kalman gain
+    // Joseph form: P = (I - K*H)*P*(I - K*H)' + K*R*K'
+    // For position update, H = I for position states
+    double reduction_factor = (1.0 - K_pos) * (1.0 - K_pos) + K_pos * K_pos * map_variance / pos_variance;
+    reduction_factor = std::max(0.01, reduction_factor);  // At least 99% reduction
+
+    P_scaled.block<3,3>(0,0) = P_scaled.block<3,3>(0,0) * reduction_factor;
+    P_scaled.block<3,3>(3,3) = P_scaled.block<3,3>(3,3) * (1.0 - 0.5 * K_vel);  // Velocity uncertainty reduction
 
     // Recompute Cholesky factor
     Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
@@ -588,5 +717,6 @@ void ScaledUKF::updateMapMatch(const Eigen::Vector3d& matched_position_ECEF, dou
         S_ = llt.matrixL();
     }
 
-    std::cout << "Map match applied: correction = " << innovation.norm() << " m\n";
+    std::cout << "Map match applied: correction = " << std::fixed << std::setprecision(1)
+              << innovation.norm() << " m (K=" << std::setprecision(2) << K_pos << ")\n";
 }
