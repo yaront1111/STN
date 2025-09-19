@@ -31,8 +31,16 @@ public:
     
     // Robust matrix operations
     template<int Size>
-    static Eigen::Matrix<double, Size, Size> 
+    static Eigen::Matrix<double, Size, Size>
     robustMatrixSqrt(const Eigen::Matrix<double, Size, Size>& matrix);
+
+    // Rank-1 Cholesky update/downdate
+    // Updates S such that S_new*S_new' = S*S' + alpha*v*v'
+    // alpha = +1 for update, -1 for downdate
+    template<int Size>
+    static void cholupdate(Eigen::Matrix<double, Size, Size>& S,
+                          const Eigen::Matrix<double, Size, 1>& v,
+                          double alpha);
     
     template<int Rows, int Cols>
     static Eigen::Matrix<double, Rows, Cols>

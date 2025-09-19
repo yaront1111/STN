@@ -125,7 +125,16 @@ public:
         return use_enu_ ? enuToEcef(nominal_state_) : nominal_state_;
     }
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCovariance() const {
-        return P_;  // Covariance is already in the working frame
+        // Return P = S * S^T from the Cholesky factor
+        return S_ * S_.transpose();
+    }
+
+    // Square-root specific accessors
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> getCholeksyFactor() const {
+        return S_;
+    }
+    void setCholeskyFactor(const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& S) {
+        S_ = S;
     }
     
     // Getters for modular components
@@ -136,7 +145,19 @@ public:
     
     // Update state and covariance (for measurements)
     void setState(const State& state) { nominal_state_ = state; }
-    void setCovariance(const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P) { P_ = P; }
+    void setCovariance(const Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P) {
+        // Convert covariance to Cholesky factor
+        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P);
+        if (llt.info() == Eigen::Success) {
+            S_ = llt.matrixL();
+        } else {
+            // Fallback: enforce positive definiteness first
+            Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_safe = P;
+            UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_safe, 1e-9);
+            Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt_safe(P_safe);
+            S_ = llt_safe.matrixL();
+        }
+    }
     
     // Filter integrity monitoring
     double getNEES() const { return integrity_stats_.nees; }
@@ -151,8 +172,9 @@ protected:
     // Nominal state (16D with quaternion)
     State nominal_state_;
 
-    // Error-state covariance (15x15)
-    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_;
+    // Square-root covariance (Cholesky factor S where P = S*S^T)
+    // Using lower triangular matrix for numerical stability
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> S_;
 
     // UKF configuration and parameters
     UKFConfig cfg_;
@@ -184,6 +206,9 @@ public:
 protected:
     void initializeEnu(const Eigen::Vector3d& anchor_ECEF);
     void checkAndReanchor();
+
+    // Square-root specific process noise addition
+    void addProcessNoiseSquareRoot(double dt);
 
 private:
 

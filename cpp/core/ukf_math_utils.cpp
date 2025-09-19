@@ -319,6 +319,56 @@ Eigen::Matrix<double, 15, 15> UKFMathUtils::robustMatrixSqrt<15>(const Eigen::Ma
     return 0.5 * (result + result.transpose());
 }
 
+// Explicit template instantiation for cholupdate
+template<>
+void UKFMathUtils::cholupdate<15>(Eigen::Matrix<double, 15, 15>& S,
+                                 const Eigen::Matrix<double, 15, 1>& v,
+                                 double alpha) {
+    // Rank-1 Cholesky update/downdate using Givens rotations
+    // Based on Golub & Van Loan algorithm
+
+    Eigen::Matrix<double, 15, 1> x = v;
+
+    if (alpha > 0) {
+        // Update: S_new*S_new' = S*S' + v*v'
+        for (int k = 0; k < 15; k++) {
+            double r = std::hypot(S(k,k), x(k));
+            double c = S(k,k) / r;
+            double s = x(k) / r;
+            S(k,k) = r;
+
+            if (k < 14) {
+                // Update the rest of row k
+                for (int j = k+1; j < 15; j++) {
+                    S(j,k) = (S(j,k) + s * x(j)) / c;
+                    x(j) = c * x(j) - s * S(j,k);
+                }
+            }
+        }
+    } else {
+        // Downdate: S_new*S_new' = S*S' - v*v'
+        // More numerically sensitive, need to check for negative result
+        for (int k = 0; k < 15; k++) {
+            double r_sq = S(k,k) * S(k,k) - x(k) * x(k);
+            if (r_sq <= 0) {
+                std::cerr << "WARNING: Cholesky downdate would result in non-PD matrix\n";
+                return;  // Don't update if it would break positive definiteness
+            }
+            double r = std::sqrt(r_sq);
+            double c = r / S(k,k);
+            double s = x(k) / S(k,k);
+            S(k,k) = r;
+
+            if (k < 14) {
+                for (int j = k+1; j < 15; j++) {
+                    S(j,k) = (S(j,k) - s * x(j)) / c;
+                    x(j) = c * x(j) - s * S(j,k);
+                }
+            }
+        }
+    }
+}
+
 // Error-state operations
 State UKFMathUtils::applyErrorToState(const State& nominal_state, 
                                      const Eigen::Matrix<double, 15, 1>& error_vector) {

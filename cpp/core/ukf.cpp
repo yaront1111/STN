@@ -63,36 +63,57 @@ void UKF::init(const State& x0_ECEF, const Eigen::Matrix<double, ERROR_STATE_DIM
 
         // In ENU mode, we receive P0 in ECEF mindset but need to adapt it for ENU scale
         // Key insight: In ENU, position starts at [0,0,0], so we need much smaller position variance
-        P_ = P0;
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_temp = P0;
 
         // Critical: Balance covariance to achieve good condition number
         // Goal: Keep ratio of largest to smallest eigenvalue < 1e6
 
         // Position: 1 m² (1m uncertainty in local frame)
-        P_.block<3,3>(POS_IDX, POS_IDX) = Eigen::Matrix3d::Identity() * 1.0;
+        P_temp.block<3,3>(POS_IDX, POS_IDX) = Eigen::Matrix3d::Identity() * 1.0;
 
         // Velocity: 0.1 m²/s² (0.316 m/s uncertainty)
-        P_.block<3,3>(VEL_IDX, VEL_IDX) = Eigen::Matrix3d::Identity() * 0.1;
+        P_temp.block<3,3>(VEL_IDX, VEL_IDX) = Eigen::Matrix3d::Identity() * 0.1;
 
         // Attitude: 0.01 rad² (0.1 rad uncertainty)
-        P_.block<3,3>(ATT_IDX, ATT_IDX) = Eigen::Matrix3d::Identity() * 0.01;
+        P_temp.block<3,3>(ATT_IDX, ATT_IDX) = Eigen::Matrix3d::Identity() * 0.01;
 
         // Accel bias: 0.001 m²/s⁴
-        P_.block<3,3>(BA_IDX, BA_IDX) = Eigen::Matrix3d::Identity() * 0.001;
+        P_temp.block<3,3>(BA_IDX, BA_IDX) = Eigen::Matrix3d::Identity() * 0.001;
 
         // Gyro bias: 0.0001 rad²/s² - balanced with position
-        P_.block<3,3>(BG_IDX, BG_IDX) = Eigen::Matrix3d::Identity() * 0.0001;
+        P_temp.block<3,3>(BG_IDX, BG_IDX) = Eigen::Matrix3d::Identity() * 0.0001;
 
-        std::cout << "ENU mode: Covariance scaled for local frame operation\n";
+        // Convert to Cholesky factor
+        UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_temp);
+        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_temp);
+        if (llt.info() == Eigen::Success) {
+            S_ = llt.matrixL();
+        } else {
+            std::cerr << "ERROR: Failed to compute Cholesky factor in init!\n";
+            S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+        }
 
-        // Debug: Check condition number after scaling
-        double cond = UKFMathUtils::computeConditionNumber(P_);
-        std::cout << "  Condition number after ENU scaling: " << cond << "\n";
+        std::cout << "ENU mode: Square-root covariance initialized for local frame operation\n";
+
+        // Debug: Check condition number of S (should be sqrt of P's condition)
+        double cond_S = UKFMathUtils::computeConditionNumber(S_);
+        std::cout << "  Condition number of S: " << cond_S << " (sqrt improvement over P)\n";
     } else {
         nominal_state_ = x0_ECEF;
-        P_ = P0;
+
+        // Ensure P0 is positive definite before Cholesky decomposition
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_temp = P0;
+        UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_temp);
+
+        // Compute Cholesky factor
+        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_temp);
+        if (llt.info() == Eigen::Success) {
+            S_ = llt.matrixL();
+        } else {
+            std::cerr << "ERROR: Failed to compute Cholesky factor in init!\n";
+            S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+        }
     }
-    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_);
 }
 
 void UKF::setGravityProvider(GravityGradientProvider* provider) {
@@ -108,19 +129,13 @@ void UKF::setGravityProvider(GravityGradientProvider* provider) {
 }
 
 void UKF::predict(const ImuSample& imu, double dt) {
-    // First ensure current covariance is valid
-    if (!UKFMathUtils::checkMatrixValidity<ERROR_STATE_DIM>(P_)) {
-        std::cerr << "WARNING: Invalid covariance before predict, fixing...\n";
-        UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_, cfg_.numerical.min_eigenvalue);
-    }
-
     // Check if we need to re-anchor in ENU mode
     if (use_enu_) {
         checkAndReanchor();
     }
 
-    // Generate sigma points using modular manager
-    sigma_points_manager_->generate(nominal_state_, P_, lambda_);
+    // Generate sigma points using Cholesky factor directly (no matrix sqrt needed!)
+    sigma_points_manager_->generate(nominal_state_, S_, lambda_);
 
     // Propagate sigma points through motion model
     auto propagated_states = sigma_points_manager_->propagateStates(imu, dt);
@@ -128,39 +143,69 @@ void UKF::predict(const ImuSample& imu, double dt) {
     // Compute predicted mean state
     nominal_state_ = sigma_points_manager_->computeMeanState(propagated_states, weights_mean_);
 
-    // Compute predicted covariance
-    P_ = sigma_points_manager_->computeCovariance(propagated_states, nominal_state_, weights_cov_);
+    // Compute predicted Cholesky factor using QR decomposition (more stable!)
+    S_ = sigma_points_manager_->computeCholeskyFactor(propagated_states, nominal_state_, weights_cov_);
 
-    // Add process noise
-    addProcessNoise(dt);
+    // Add process noise using QR decomposition
+    addProcessNoiseSquareRoot(dt);
 
-    // Add covariance floor to prevent overconfidence
-    const double min_variance = 1e-12;  // Minimum variance on diagonal
-    for (int i = 0; i < ERROR_STATE_DIM; i++) {
-        if (P_(i,i) < min_variance) {
-            P_(i,i) = min_variance;
+    // Check condition number of S (should be much better than P)
+    static int predict_count = 0;
+    if (++predict_count % 100 == 0) {  // Check every 100 predictions
+        double cond_S = UKFMathUtils::computeConditionNumber(S_);
+        if (cond_S > 1e6) {
+            std::cerr << "WARNING: Condition number of S is " << cond_S << "\n";
         }
-    }
-
-    // Final check and fix
-    if (!UKFMathUtils::checkMatrixValidity<ERROR_STATE_DIM>(P_)) {
-        std::cerr << "WARNING: Invalid covariance after predict, fixing...\n";
-        UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_, cfg_.numerical.min_eigenvalue);
     }
 }
 
 void UKF::addProcessNoise(double dt) {
+    // Legacy method - convert to square root form
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P = S_ * S_.transpose();
+
     // Add process noise to covariance
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> Q =
         Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Zero();
 
-    // Adaptive noise scaling based on current uncertainty
-    double pos_uncertainty = std::sqrt(P_.block<3,3>(POS_IDX, POS_IDX).trace() / 3.0);
-    double vel_uncertainty = std::sqrt(P_.block<3,3>(VEL_IDX, VEL_IDX).trace() / 3.0);
+    Q.block<3,3>(POS_IDX, POS_IDX) = Eigen::Matrix3d::Identity() *
+        cfg_.process_noise.position * cfg_.process_noise.position * dt * dt;
+    Q.block<3,3>(VEL_IDX, VEL_IDX) = Eigen::Matrix3d::Identity() *
+        cfg_.process_noise.velocity * cfg_.process_noise.velocity * dt;
+    Q.block<3,3>(ATT_IDX, ATT_IDX) = Eigen::Matrix3d::Identity() *
+        cfg_.process_noise.attitude * cfg_.process_noise.attitude * dt;
+    Q.block<3,3>(BA_IDX, BA_IDX) = Eigen::Matrix3d::Identity() *
+        cfg_.process_noise.accel_bias * cfg_.process_noise.accel_bias * dt;
+    Q.block<3,3>(BG_IDX, BG_IDX) = Eigen::Matrix3d::Identity() *
+        cfg_.process_noise.gyro_bias * cfg_.process_noise.gyro_bias * dt;
 
-    // Scale process noise adaptively - increase when uncertainty is too low
-    double pos_scale = (pos_uncertainty < 10.0) ? 2.0 : 1.0;  // Boost if too certain
-    double vel_scale = (vel_uncertainty < 1.0) ? 2.0 : 1.0;
+    P += Q;
+
+    // Convert back to Cholesky factor
+    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P, cfg_.numerical.min_eigenvalue);
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P);
+    if (llt.info() == Eigen::Success) {
+        S_ = llt.matrixL();
+    }
+}
+
+void UKF::addProcessNoiseSquareRoot(double dt) {
+    // For now, use the simpler (less efficient) approach: convert to P, add Q, convert back
+    // This is more robust than the QR approach which seems to have numerical issues
+
+    // Reconstruct P from S
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P = S_ * S_.transpose();
+
+    // Create process noise covariance
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> Q =
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Zero();
+
+    // Get current uncertainty estimates
+    double pos_var = P.block<3,3>(POS_IDX, POS_IDX).trace() / 3.0;
+    double vel_var = P.block<3,3>(VEL_IDX, VEL_IDX).trace() / 3.0;
+
+    // Adaptive scaling
+    double pos_scale = (std::sqrt(pos_var) < 10.0) ? 2.0 : 1.0;
+    double vel_scale = (std::sqrt(vel_var) < 1.0) ? 2.0 : 1.0;
 
     Q.block<3,3>(POS_IDX, POS_IDX) = Eigen::Matrix3d::Identity() *
         cfg_.process_noise.position * cfg_.process_noise.position * dt * dt * pos_scale;
@@ -173,18 +218,34 @@ void UKF::addProcessNoise(double dt) {
     Q.block<3,3>(BG_IDX, BG_IDX) = Eigen::Matrix3d::Identity() *
         cfg_.process_noise.gyro_bias * cfg_.process_noise.gyro_bias * dt;
 
-    P_ += Q;
+    // Add process noise
+    P += Q;
 
     // Ensure minimum uncertainty to prevent collapse
-    double min_pos_var = 1.0;  // 1 m^2 minimum
-    double min_vel_var = 0.01; // 0.1 m/s minimum
+    double min_pos_var = 1.0;   // 1 m^2 minimum
+    double min_vel_var = 0.01;  // 0.01 m^2/s^2 minimum
     for (int i = 0; i < 3; i++) {
-        P_(POS_IDX + i, POS_IDX + i) = std::max(P_(POS_IDX + i, POS_IDX + i), min_pos_var);
-        P_(VEL_IDX + i, VEL_IDX + i) = std::max(P_(VEL_IDX + i, VEL_IDX + i), min_vel_var);
+        P(POS_IDX + i, POS_IDX + i) = std::max(P(POS_IDX + i, POS_IDX + i), min_pos_var);
+        P(VEL_IDX + i, VEL_IDX + i) = std::max(P(VEL_IDX + i, VEL_IDX + i), min_vel_var);
     }
 
-    // Enforce positive definiteness
-    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_, cfg_.numerical.min_eigenvalue);
+    // Ensure positive definiteness
+    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P, cfg_.numerical.min_eigenvalue);
+
+    // Convert back to Cholesky factor
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P);
+    if (llt.info() == Eigen::Success) {
+        S_ = llt.matrixL();
+    } else {
+        std::cerr << "ERROR: Failed to compute Cholesky factor after adding process noise!\n";
+        // Reset to safe diagonal
+        S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+        S_.block<3,3>(0,0) *= 1.0;     // Position
+        S_.block<3,3>(3,3) *= 0.316;   // Velocity
+        S_.block<3,3>(6,6) *= 0.1;     // Attitude
+        S_.block<3,3>(9,9) *= 0.0316;  // Accel bias
+        S_.block<3,3>(12,12) *= 0.01;  // Gyro bias
+    }
 }
 
 void UKF::enforcePositiveDefinite(Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>& P) {

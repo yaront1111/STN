@@ -33,10 +33,15 @@ class UKFSigmaPoints {
 public:
     explicit UKFSigmaPoints(UKF& ukf, GravityGradientProvider* gravity_provider = nullptr);
     
-    // Generate sigma points from current state and covariance
-    void generate(const State& nominal_state, 
-                  const Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>& P,
+    // Generate sigma points from current state and Cholesky factor
+    void generate(const State& nominal_state,
+                  const Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>& S,
                   double lambda);
+
+    // Legacy method for backward compatibility (converts P to S)
+    void generateFromCovariance(const State& nominal_state,
+                                const Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>& P,
+                                double lambda);
     
     // Access sigma points
     const std::vector<SigmaPoint>& getSigmaPoints() const { return sigma_points_; }
@@ -49,10 +54,16 @@ public:
     State computeMeanState(const std::vector<State>& states, 
                           const Eigen::VectorXd& weights_mean);
     
-    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> 
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>
     computeCovariance(const std::vector<State>& states,
                       const State& mean_state,
                       const Eigen::VectorXd& weights_cov);
+
+    // Compute Cholesky factor directly using QR decomposition (more stable!)
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>
+    computeCholeskyFactor(const std::vector<State>& states,
+                         const State& mean_state,
+                         const Eigen::VectorXd& weights_cov);
 
 private:
     UKF& ukf_;  // Non-const reference

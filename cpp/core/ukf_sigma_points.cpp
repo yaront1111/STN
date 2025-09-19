@@ -10,31 +10,10 @@ UKFSigmaPoints::UKFSigmaPoints(UKF& ukf, GravityGradientProvider* gravity_provid
 }
 
 void UKFSigmaPoints::generate(const State& nominal_state,
-                              const Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>& P,
+                              const Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>& S,
                               double lambda) {
-    // First make a copy and enforce positive definiteness
-    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> P_safe = P;
-
-    // Enforce symmetry and positive definiteness
-    P_safe = 0.5 * (P_safe + P_safe.transpose());
-    UKFMathUtils::enforcePositiveDefinite<UKF_ERROR_STATE_DIM>(P_safe, 1e-9);
-
-    // Check if the covariance is still invalid after fixing
-    if (!UKFMathUtils::checkMatrixValidity<UKF_ERROR_STATE_DIM>(P_safe)) {
-        std::cerr << "WARNING: Resetting invalid covariance matrix in sigma point generation!\n";
-        // Reset to a safe diagonal matrix if still invalid
-        // Use balanced values appropriate for ENU operation
-        P_safe = Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>::Identity();
-        P_safe.block<3,3>(0,0) *= 1.0;     // Position: 1 m²
-        P_safe.block<3,3>(3,3) *= 0.1;     // Velocity: 0.1 m²/s²
-        P_safe.block<3,3>(6,6) *= 0.01;    // Attitude: 0.01 rad²
-        P_safe.block<3,3>(9,9) *= 0.001;   // Accel bias: 0.001 m²/s⁴
-        P_safe.block<3,3>(12,12) *= 0.0001; // Gyro bias: 0.0001 rad²/s²
-    }
-
-    // Compute matrix square root using robust method
-    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> sqrt_P =
-        computeMatrixSqrt(P_safe);
+    // S is already the Cholesky factor (square root of P)!
+    // No need to compute matrix square root - huge numerical win!
 
     double sqrt_factor = std::sqrt(UKF_ERROR_STATE_DIM + lambda);
 
@@ -45,7 +24,7 @@ void UKFSigmaPoints::generate(const State& nominal_state,
     // Positive and negative sigma points
     for (int i = 0; i < UKF_ERROR_STATE_DIM; ++i) {
         Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> offset =
-            sqrt_factor * sqrt_P.col(i);
+            sqrt_factor * S.col(i);  // Use S directly - it's already the sqrt!
 
         // Apply error to nominal state using UKF's method
         State pos_state = UKFMathUtils::applyErrorToState(nominal_state, offset);
@@ -56,6 +35,23 @@ void UKFSigmaPoints::generate(const State& nominal_state,
 
         // Negative sigma point (index i+1+ERROR_STATE_DIM)
         sigma_points_[i + 1 + UKF_ERROR_STATE_DIM] = SigmaPoint(neg_state, 0, 0);
+    }
+}
+
+void UKFSigmaPoints::generateFromCovariance(const State& nominal_state,
+                                           const Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>& P,
+                                           double lambda) {
+    // Convert P to Cholesky factor and call the main method
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> P_safe = P;
+    P_safe = 0.5 * (P_safe + P_safe.transpose());
+    UKFMathUtils::enforcePositiveDefinite<UKF_ERROR_STATE_DIM>(P_safe, 1e-9);
+
+    Eigen::LLT<Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>> llt(P_safe);
+    if (llt.info() == Eigen::Success) {
+        generate(nominal_state, llt.matrixL(), lambda);
+    } else {
+        std::cerr << "WARNING: Failed to compute Cholesky in generateFromCovariance, using identity!\n";
+        generate(nominal_state, Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>::Identity(), lambda);
     }
 }
 
@@ -212,10 +208,69 @@ Eigen::Quaterniond UKFSigmaPoints::computeMeanQuaternion(const std::vector<State
                                                         const Eigen::VectorXd& weights_mean) {
     std::vector<Eigen::Quaterniond> quaternions;
     quaternions.reserve(states.size());
-    
+
     for (const auto& state : states) {
         quaternions.push_back(state.q_ECEF_B);
     }
-    
+
     return UKFMathUtils::averageQuaternions(quaternions, weights_mean);
+}
+
+Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>
+UKFSigmaPoints::computeCholeskyFactor(const std::vector<State>& states,
+                                     const State& mean_state,
+                                     const Eigen::VectorXd& weights_cov) {
+    // Build the matrix A where columns are weighted deviations
+    // A = [sqrt(w_1)*(X_1-x_mean), ..., sqrt(w_2n)*(X_2n-x_mean)]
+
+    // Note: weights_cov(0) is typically negative for the central point
+    // We need to handle this carefully
+
+    int num_sigma = states.size();
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, Eigen::Dynamic> A(UKF_ERROR_STATE_DIM, num_sigma - 1);
+
+    int col = 0;
+    for (size_t i = 1; i < states.size(); ++i) {  // Skip central point (i=0) since its weight is negative
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error =
+            UKFMathUtils::computeErrorVector(states[i], mean_state);
+
+        // Square root of weight (should be positive for i > 0)
+        double sqrt_weight = std::sqrt(std::abs(weights_cov(i)));
+        A.col(col) = sqrt_weight * error;
+        col++;
+    }
+
+    // Perform QR decomposition
+    Eigen::HouseholderQR<Eigen::Matrix<double, UKF_ERROR_STATE_DIM, Eigen::Dynamic>> qr(A);
+    Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> R =
+        qr.matrixQR().triangularView<Eigen::Upper>()
+            .toDenseMatrix()
+            .block(0, 0, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM);
+
+    // Handle the central sigma point's negative weight contribution
+    // This requires a rank-1 downdate
+    if (weights_cov(0) < 0) {
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, 1> error0 =
+            UKFMathUtils::computeErrorVector(states[0], mean_state);
+        double sqrt_abs_weight0 = std::sqrt(std::abs(weights_cov(0)));
+
+        // We need to perform a rank-1 downdate: S_new = chol(R'*R - v*v')
+        // For now, compute full covariance and recholesky (TODO: implement efficient choldowndate)
+        Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM> P = R.transpose() * R;
+        P -= (sqrt_abs_weight0 * error0) * (sqrt_abs_weight0 * error0).transpose();
+
+        // Ensure positive definiteness
+        UKFMathUtils::enforcePositiveDefinite<UKF_ERROR_STATE_DIM>(P, 1e-12);
+
+        // Compute Cholesky of updated covariance
+        Eigen::LLT<Eigen::Matrix<double, UKF_ERROR_STATE_DIM, UKF_ERROR_STATE_DIM>> llt(P);
+        if (llt.info() == Eigen::Success) {
+            return llt.matrixL();
+        } else {
+            std::cerr << "WARNING: Cholesky failed in computeCholeskyFactor, returning R\n";
+            return R.transpose();  // Return transpose since we want lower triangular
+        }
+    }
+
+    return R.transpose();  // Return lower triangular
 }
