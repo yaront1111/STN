@@ -220,12 +220,22 @@ int main(int argc, char** argv) {
         // Update with gravity anomaly from accelerometer
         // This provides continuous updates even without gradiometer
         if (t > 1.0) {  // Wait for filter to settle
-            // Extract gravity from accelerometer
             State current = ukf.getState();
-            Eigen::Vector3d gravity_body = imu_sample.acc_mps2;  // Simplified
-            
-            // Transform to ECEF and compute anomaly
-            Eigen::Vector3d gravity_ecef = current.q_ECEF_B * gravity_body;
+
+            // Earth's rotation vector in ECEF frame
+            const Eigen::Vector3d omega_ie(0, 0, 7.292115e-5); // rad/s
+
+            // 1. Transform measured specific force from body to ECEF
+            Eigen::Vector3d f_ib_e = current.q_ECEF_B * imu_sample.acc_mps2;
+
+            // 2. Calculate and remove Coriolis acceleration (transport rate)
+            Eigen::Vector3d coriolis_accel = 2 * omega_ie.cross(current.v_ECEF);
+
+            // 3. Calculate and remove centripetal acceleration
+            Eigen::Vector3d centripetal_accel = omega_ie.cross(omega_ie.cross(current.p_ECEF));
+
+            // 4. Isolate the true gravity vector
+            Eigen::Vector3d gravity_ecef = f_ib_e - centripetal_accel + coriolis_accel; // Note the sign on Coriolis
             double measured_g = gravity_ecef.norm();
 
             // Get WGS84 normal gravity based on current position

@@ -133,8 +133,17 @@ void UKFMeasurements::updateMeasurementInternal(
         return;
     }
 
-    if (apply_gate && !UKFMathUtils::chiSquareTest(nis, MeasDim, 0.99)) {
-        std::cout << "Measurement REJECTED by chi-square gate (NIS=" << nis << ")\n";
+    // Use configured chi-square threshold based on measurement dimension
+    // For 1-DOF: 3.84 (95%), 6.63 (99%), 10.83 (99.9%)
+    // For 3-DOF: 7.81 (95%), 11.34 (99%), 16.27 (99.9%)
+    double chi2_threshold = ukf_.cfg_.numerical.innovation_outlier_chi2;
+    if (MeasDim == 1) {
+        // Override for scalar measurements (like gravity anomaly)
+        chi2_threshold = 6.63;  // 99% confidence for 1-DOF
+    }
+
+    if (apply_gate && nis > chi2_threshold) {
+        std::cout << "Measurement REJECTED by chi-square gate (NIS=" << nis << " > " << chi2_threshold << ")\n";
         return;
     }
     
