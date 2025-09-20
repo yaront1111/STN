@@ -269,7 +269,7 @@ public:
             (N * (1 - e2) + alt) * std::sin(lat)
         );
 
-        state.v_ECEF = Eigen::Vector3d(50, 0, 0); // 50 m/s north
+        state.v_ECEF = Eigen::Vector3d(10, 0, 0); // 10 m/s north (more realistic)
         state.q_ECEF_B = Eigen::Quaterniond::Identity();
 
         // Initial uncertainty
@@ -571,6 +571,11 @@ int main(int argc, char** argv) {
     UKFConfig ukf_config;
     ukf_config.setDefaults();
 
+    // Reduce process noise for more stable navigation
+    ukf_config.process_noise.position = 0.01;      // Reduced from 0.1
+    ukf_config.process_noise.velocity = 0.001;     // Reduced from 0.01
+    ukf_config.process_noise.attitude = 0.0001;    // Reduced from 0.001
+
     // Adjust noise based on debug mode
     if (config.debug) {
         ukf_config.verbose = true;
@@ -578,14 +583,7 @@ int main(int argc, char** argv) {
 
     ScaledUKF ukf(ukf_config);
 
-    // Initialize state
-    State initial_state;
-    Eigen::MatrixXd initial_cov(15, 15);
-    scenario->initialize(initial_state, initial_cov);
-    ukf.init(initial_state, initial_cov);
-    logger.info("UKF initialized");
-
-    // Initialize gravity provider if enabled
+    // Initialize gravity provider if enabled (must be before UKF init)
     std::unique_ptr<GravityGradientProvider> gravity_provider;
     if (config.enable_gravity) {
         logger.info("Initializing gravity gradient provider...");
@@ -593,9 +591,21 @@ int main(int argc, char** argv) {
 
         // Initialize with synthetic model for testing
         if (!gravity_provider->initializeSynthetic()) {
-            logger.warn("Using synthetic gravity model");
+            logger.error("Failed to initialize gravity provider");
+            return 1;
         }
+
+        // Set gravity provider in UKF
+        ukf.setGravityProvider(gravity_provider.get());
+        logger.info("Gravity provider set in UKF");
     }
+
+    // Initialize state
+    State initial_state;
+    Eigen::MatrixXd initial_cov(15, 15);
+    scenario->initialize(initial_state, initial_cov);
+    ukf.init(initial_state, initial_cov);
+    logger.info("UKF initialized");
 
     // Initialize terrain provider if enabled
     std::unique_ptr<SRTMProvider> terrain_provider;
@@ -664,11 +674,11 @@ int main(int argc, char** argv) {
                 current_state.p_ECEF, current_state.q_ECEF_B);
 
             // Add measurement noise
-            std::normal_distribution<> grad_noise(0, 0.1);
+            std::normal_distribution<> grad_noise(0, 1.0);  // 1 E noise (realistic)
             gradient += Eigen::Matrix3d::Random() * grad_noise(gen);
 
             // Update UKF
-            Eigen::Matrix3d R = Eigen::Matrix3d::Identity() * 0.01;  // 0.1 E noise
+            Eigen::Matrix3d R = Eigen::Matrix3d::Identity() * 1.0;  // 1 E^2 noise variance
             ukf.updateGradient(gradient, R);
             stats.gravity_updates++;
 
@@ -694,7 +704,7 @@ int main(int argc, char** argv) {
 
             // Update
             Eigen::Vector3d mag_ref = Eigen::Vector3d(0, 0, -50e-6);
-            Eigen::Matrix3d R_mag = Eigen::Matrix3d::Identity() * 1e-12;
+            Eigen::Matrix3d R_mag = Eigen::Matrix3d::Identity() * (100e-9 * 100e-9);  // 100 nT noise
             ukf.updateMagnetometer(mag_body, mag_ref, R_mag);
             stats.mag_updates++;
 
