@@ -516,10 +516,15 @@ void ScaledUKF::updateGradient(const Eigen::Matrix3d& measured_gradient, const E
         }
     }
 
-    // Flatten R to 9x9
+    // Flatten R to 9x9 - properly construct block diagonal matrix
     Eigen::Matrix<double, 9, 9> R_flat = Eigen::Matrix<double, 9, 9>::Zero();
-    for (int i = 0; i < 9; ++i) {
-        R_flat(i, i) = R(i/3, i%3);
+    // Gravity gradient tensor measurement has correlated noise
+    // For now, use diagonal approximation with proper scaling
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            int idx = i * 3 + j;
+            R_flat(idx, idx) = R(i, j);  // Use full R matrix values
+        }
     }
 
     // Compute cross-covariance Pxy (in physical space)
@@ -554,13 +559,50 @@ void ScaledUKF::updateGradient(const Eigen::Matrix3d& measured_gradient, const E
         Pyy += weights_cov_(i) * dy * dy.transpose();
     }
 
-    // Kalman gain
-    Eigen::Matrix<double, ERROR_STATE_DIM, 9> K = Pxy * Pyy.inverse();
+    // Kalman gain using pseudo-inverse for numerical stability
+    Eigen::JacobiSVD<Eigen::Matrix<double, 9, 9>> svd(Pyy, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    const double tolerance = 1e-9 * std::max(1.0, svd.singularValues()(0));
+    Eigen::Matrix<double, 9, 9> Pyy_pinv = Eigen::Matrix<double, 9, 9>::Zero();
+    for (int i = 0; i < 9; ++i) {
+        if (svd.singularValues()(i) > tolerance) {
+            Pyy_pinv += (1.0 / svd.singularValues()(i)) *
+                        svd.matrixV().col(i) * svd.matrixU().col(i).transpose();
+        }
+    }
+    Eigen::Matrix<double, ERROR_STATE_DIM, 9> K = Pxy * Pyy_pinv;
 
-    // State update
+    // State update with innovation check
     Eigen::Matrix<double, 9, 1> innovation_flat = y - y_pred;
+
+    // Chi-squared test for outlier rejection (9 DOF, 99% confidence)
+    double chi2_threshold = 21.67;  // chi2inv(0.99, 9)
+    double mahalanobis = innovation_flat.transpose() * Pyy_pinv * innovation_flat;
+
+    if (mahalanobis > chi2_threshold) {
+        if (config_.verbose) {
+            std::cout << "[ScaledUKF] Gravity gradient innovation rejected (chi² = "
+                     << mahalanobis << " > " << chi2_threshold << ")\n";
+        }
+        return;  // Reject this measurement
+    }
+
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> dx_physical = K * innovation_flat;
+
+    // Check for NaN before applying
+    if (!dx_physical.allFinite()) {
+        std::cerr << "[ScaledUKF] ERROR: NaN in state correction, rejecting update\n";
+        return;
+    }
+
     nominal_state_ = applyErrorPhysical(nominal_state_, dx_physical);
+
+    // Verify state after update
+    if (!nominal_state_.p_ECEF.allFinite() || !nominal_state_.v_ECEF.allFinite()) {
+        std::cerr << "[ScaledUKF] ERROR: NaN in state after update, reverting\n";
+        // Revert by applying negative correction
+        nominal_state_ = applyErrorPhysical(nominal_state_, -dx_physical);
+        return;
+    }
 
     // Covariance update in scaled space (Joseph form for stability)
     // Transform to scaled space
@@ -573,10 +615,24 @@ void ScaledUKF::updateGradient(const Eigen::Matrix3d& measured_gradient, const E
     // Perform Joseph form update for numerical stability
     // P+ = (I - K*H) * P * (I - K*H)' + K*R*K'
 
-    // Approximate H matrix (measurement Jacobian)
-    Eigen::Matrix<double, 9, ERROR_STATE_DIM> H_approx = Eigen::Matrix<double, 9, ERROR_STATE_DIM>::Zero();
-    // Gradient is most sensitive to position
-    H_approx.block<9, 3>(0, 0) = Eigen::Matrix<double, 9, 3>::Identity() * 0.1;  // Position sensitivity
+    // Compute measurement Jacobian from sigma points (more accurate than approximation)
+    // H ≈ Pyx^T * Pxx^-1 where Pyx is measurement-state cross-covariance
+    Eigen::Matrix<double, 9, ERROR_STATE_DIM> H_approx;
+
+    // Use pseudo-inverse of state covariance for numerical stability
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_physical = getCovariance();
+    Eigen::JacobiSVD<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> svd_P(
+        P_physical, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    const double tol_P = 1e-9 * svd_P.singularValues()(0);
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_inv =
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Zero();
+    for (int i = 0; i < ERROR_STATE_DIM; ++i) {
+        if (svd_P.singularValues()(i) > tol_P) {
+            P_inv += (1.0 / svd_P.singularValues()(i)) *
+                     svd_P.matrixV().col(i) * svd_P.matrixU().col(i).transpose();
+        }
+    }
+    H_approx = Pxy.transpose() * P_inv;
 
     // Transform K to scaled space (reuse existing variable)
     K_scaled = scaler_.getInverseScalingMatrix() * K;
@@ -749,8 +805,25 @@ void ScaledUKF::updateMagnetometer(const Eigen::Vector3d& mag_body,
     Eigen::Matrix3d S_innovation = H * P_physical * H.transpose() + R_mag;
     Eigen::Matrix<double, ERROR_STATE_DIM, 3> K = P_physical * H.transpose() * S_innovation.inverse();
 
-    // State correction
+    // State correction with checks
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> dx = K * innovation;
+
+    // Check for NaN
+    if (!dx.allFinite()) {
+        std::cerr << "[ScaledUKF] ERROR: NaN in magnetometer correction, rejecting\n";
+        return;
+    }
+
+    // Chi-squared test (3 DOF, 99% confidence)
+    double chi2_threshold = 11.34;
+    double mahalanobis = innovation.transpose() * S_innovation.inverse() * innovation;
+    if (mahalanobis > chi2_threshold) {
+        if (config_.verbose) {
+            std::cout << "[ScaledUKF] Magnetometer innovation rejected (chi² = "
+                     << mahalanobis << " > " << chi2_threshold << ")\n";
+        }
+        return;
+    }
 
     // Apply correction to nominal state
     nominal_state_ = applyErrorPhysical(nominal_state_, dx);

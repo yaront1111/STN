@@ -207,13 +207,13 @@ void UKFMathUtils::enforcePositiveDefinite<15>(Eigen::Matrix<double, 15, 15>& ma
 
     if (es.info() != Eigen::Success) {
         std::cerr << "WARNING: Eigenvalue decomposition failed, resetting to diagonal matrix!\n";
-        // Reset to safe diagonal matrix
-        matrix = Eigen::Matrix<double, 15, 15>::Identity() * min_eigenvalue;
-        matrix.block<3,3>(0,0) *= 10000.0;  // Position: ~10cm
-        matrix.block<3,3>(3,3) *= 100.0;    // Velocity: ~0.1m/s
-        matrix.block<3,3>(6,6) *= 0.01;     // Attitude: ~0.01rad
-        matrix.block<3,3>(9,9) *= 0.0001;   // Accel bias
-        matrix.block<3,3>(12,12) *= 0.00001; // Gyro bias
+        // Reset to safe diagonal matrix with proper uncertainty scales
+        matrix = Eigen::Matrix<double, 15, 15>::Identity();
+        matrix.block<3,3>(0,0) *= 100.0;      // Position: 10m uncertainty
+        matrix.block<3,3>(3,3) *= 1.0;        // Velocity: 1m/s uncertainty
+        matrix.block<3,3>(6,6) *= 0.01;       // Attitude: 0.1rad uncertainty
+        matrix.block<3,3>(9,9) *= 1e-6;       // Accel bias: 1mm/s² uncertainty
+        matrix.block<3,3>(12,12) *= 1e-10;    // Gyro bias: 1e-5 rad/s uncertainty
         return;
     }
 
