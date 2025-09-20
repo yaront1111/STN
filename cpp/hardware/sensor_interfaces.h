@@ -1,88 +1,158 @@
 #pragma once
-#include <Eigen/Dense>
+
 #include <memory>
+#include <Eigen/Dense>
+#include "../core/types.h"
 
 /**
- * GPS-DENIED SENSOR INTERFACES
- * For hardware abstraction of additional sensors
+ * Sensor Factory for creating auxiliary sensors
  */
+class SensorFactory {
+public:
+    static std::unique_ptr<class MagnetometerInterface> createMagnetometer(const std::string& type);
+    static std::unique_ptr<class BarometerInterface> createBarometer(const std::string& type);
+    static std::unique_ptr<class RadarAltimeterInterface> createRadarAltimeter(const std::string& type);
+};
 
-// Magnetometer interface for heading reference
+/**
+ * Magnetometer Interface
+ */
 class MagnetometerInterface {
 public:
     virtual ~MagnetometerInterface() = default;
     virtual bool initialize() = 0;
-    virtual bool hasNewData() = 0;
-    virtual Eigen::Vector3d read() = 0;  // Returns field in Tesla
+    virtual bool hasNewData() const = 0;
+    virtual Eigen::Vector3d read() = 0;  // Returns magnetic field in body frame (Tesla)
 };
 
-// Barometric altimeter interface
+/**
+ * Barometric Altimeter Interface
+ */
 class BarometerInterface {
 public:
     virtual ~BarometerInterface() = default;
     virtual bool initialize() = 0;
-    virtual bool hasNewData() = 0;
-    virtual double readPressure() = 0;   // Pa
-    virtual double readAltitude() = 0;   // meters MSL
+    virtual bool hasNewData() const = 0;
+    virtual double readPressure() = 0;    // Returns pressure in hPa
+    virtual double readAltitude() = 0;    // Returns altitude MSL in meters
 };
 
-// Radar altimeter interface for terrain correlation
+/**
+ * Radar Altimeter Interface
+ */
 class RadarAltimeterInterface {
 public:
     virtual ~RadarAltimeterInterface() = default;
     virtual bool initialize() = 0;
-    virtual bool hasNewData() = 0;
-    virtual double readAltitude() = 0;   // meters AGL
+    virtual bool hasNewData() const = 0;
+    virtual double readAltitude() = 0;    // Returns altitude AGL in meters
 };
 
-// Terrain database for correlation
+/**
+ * Terrain Database Interface
+ */
 class TerrainDatabase {
 public:
-    bool loadSRTM(const std::string& filename) {
-        // Placeholder - would load real SRTM data
+    bool loadSRTM(const std::string& filepath) {
+        // In production: load SRTM elevation data
+        filepath_ = filepath;
+        return false;  // Not implemented yet
+    }
+
+    double getElevation(double lat_deg, double lon_deg) {
+        // In production: interpolate elevation from SRTM grid
+        // For now, return synthetic terrain
+        return 1000.0 + 500.0 * std::sin(lat_deg * M_PI / 30.0) * std::cos(lon_deg * M_PI / 30.0);
+    }
+
+private:
+    std::string filepath_;
+};
+
+// Concrete sensor implementations
+namespace {
+
+class HMC5883L : public MagnetometerInterface {
+public:
+    bool initialize() override {
+        // In production: initialize I2C communication
         return true;
     }
-    
-    double getElevation(double lat_deg, double lon_deg) {
-        // Placeholder - would query real terrain
-        // Return synthetic terrain for testing
-        return 500.0 + 100.0 * std::sin(lat_deg * 0.1) * std::cos(lon_deg * 0.1);
+
+    bool hasNewData() const override {
+        // In production: check I2C buffer
+        return true;
+    }
+
+    Eigen::Vector3d read() override {
+        // In production: read from HMC5883L over I2C
+        // For now, return Earth's field (approx 50 μT)
+        return Eigen::Vector3d(20e-6, 5e-6, -45e-6);  // Tesla
     }
 };
 
-// Factory functions for hardware creation
-namespace SensorFactory {
-    inline std::unique_ptr<MagnetometerInterface> createMagnetometer(const std::string& type) {
-        // Stub implementation
-        class StubMagnetometer : public MagnetometerInterface {
-            bool initialize() override { return true; }
-            bool hasNewData() override { return true; }
-            Eigen::Vector3d read() override {
-                // Return Earth-like field (~50 μT)
-                return Eigen::Vector3d(20e-6, 0, -45e-6);
-            }
-        };
-        return std::make_unique<StubMagnetometer>();
+class BMP388 : public BarometerInterface {
+public:
+    bool initialize() override {
+        // In production: initialize I2C/SPI communication
+        return true;
     }
-    
-    inline std::unique_ptr<BarometerInterface> createBarometer(const std::string& type) {
-        // Stub implementation
-        class StubBarometer : public BarometerInterface {
-            bool initialize() override { return true; }
-            bool hasNewData() override { return true; }
-            double readPressure() override { return 101325.0; }  // Sea level
-            double readAltitude() override { return 0.0; }       // MSL
-        };
-        return std::make_unique<StubBarometer>();
+
+    bool hasNewData() const override {
+        return true;
     }
-    
-    inline std::unique_ptr<RadarAltimeterInterface> createRadarAltimeter(const std::string& type) {
-        // Stub implementation
-        class StubRadarAlt : public RadarAltimeterInterface {
-            bool initialize() override { return true; }
-            bool hasNewData() override { return true; }
-            double readAltitude() override { return 1000.0; }  // 1km AGL
-        };
-        return std::make_unique<StubRadarAlt>();
+
+    double readPressure() override {
+        // Standard sea-level pressure
+        return 1013.25;  // hPa
     }
+
+    double readAltitude() override {
+        // Convert pressure to altitude using standard atmosphere
+        double pressure = readPressure();
+        double altitude = 44330.0 * (1.0 - std::pow(pressure / 1013.25, 0.1903));
+        return altitude;
+    }
+};
+
+class KRA405B : public RadarAltimeterInterface {
+public:
+    bool initialize() override {
+        // In production: initialize radar module
+        return true;
+    }
+
+    bool hasNewData() const override {
+        return true;
+    }
+
+    double readAltitude() override {
+        // In production: read radar range
+        // For now, return simulated AGL
+        return 1000.0;  // meters AGL
+    }
+};
+
+} // anonymous namespace
+
+// Factory implementations
+inline std::unique_ptr<MagnetometerInterface> SensorFactory::createMagnetometer(const std::string& type) {
+    if (type == "HMC5883L") {
+        return std::make_unique<HMC5883L>();
+    }
+    return nullptr;
+}
+
+inline std::unique_ptr<BarometerInterface> SensorFactory::createBarometer(const std::string& type) {
+    if (type == "BMP388") {
+        return std::make_unique<BMP388>();
+    }
+    return nullptr;
+}
+
+inline std::unique_ptr<RadarAltimeterInterface> SensorFactory::createRadarAltimeter(const std::string& type) {
+    if (type == "KRA405B") {
+        return std::make_unique<KRA405B>();
+    }
+    return nullptr;
 }

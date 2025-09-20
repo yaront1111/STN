@@ -481,3 +481,12 @@ double UKFMathUtils::computeConditionNumber(const Eigen::Matrix<double, Size, Si
 // Explicit instantiation for condition number
 template double UKFMathUtils::computeConditionNumber<15>(
     const Eigen::Matrix<double, 15, 15>& matrix);
+
+// Create skew-symmetric matrix from vector
+Eigen::Matrix3d UKFMathUtils::skewSymmetric(const Eigen::Vector3d& v) {
+    Eigen::Matrix3d skew;
+    skew << 0,    -v(2),  v(1),
+            v(2),  0,    -v(0),
+           -v(1),  v(0),  0;
+    return skew;
+}

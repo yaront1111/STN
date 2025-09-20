@@ -391,6 +391,42 @@ GravityGradientTensor GravityGradientProvider::getFullGradient(const Eigen::Vect
     applyRelativisticCorrections(gradient, vel_ECEF);
     
     gradient.t = t;
-    
+
     return gradient;
 }
+
+// Alternative interface for compatibility
+Eigen::Matrix3d GravityGradientProvider::getGradientTensor(const Eigen::Vector3d& pos_ECEF,
+                                                           const Eigen::Quaterniond& q_ECEF_B) const {
+    // Get gradient in ECEF frame
+    GravityGradientTensor gradient = getGradient(pos_ECEF);
+
+    // Return as Eigen matrix (could transform to body frame using q_ECEF_B if needed)
+    return gradient.T;
+}
+
+// Initialize with synthetic model for testing
+bool GravityGradientProvider::initializeSynthetic() {
+    if (!coeffs_) {
+        coeffs_ = std::make_unique<SHCoefficients>();
+    }
+
+    // Initialize with simplified Earth model (J2, J3, J4 terms only)
+    coeffs_->max_degree = 4;
+    coeffs_->C.resize(15, 0.0);  // (n+1)(n+2)/2 coefficients up to degree 4
+    coeffs_->S.resize(15, 0.0);
+
+    // Earth's main gravitational moments (normalized)
+    coeffs_->C[coeffs_->idx(0,0)] = 1.0;           // Monopole (normalized)
+    coeffs_->C[coeffs_->idx(2,0)] = -1.08263e-3;   // J2 (Earth's oblateness)
+    coeffs_->C[coeffs_->idx(3,0)] = 2.532e-6;      // J3 (pear shape)
+    coeffs_->C[coeffs_->idx(4,0)] = 1.619e-6;      // J4
+
+    // Add some tesseral harmonics for realism
+    coeffs_->C[coeffs_->idx(2,2)] = 2.439e-6;      // Sectorial
+    coeffs_->S[coeffs_->idx(2,2)] = -1.400e-6;
+
+    std::cout << "[GravityGradientProvider] Initialized with synthetic model (degree 4)\n";
+    return true;
+}
+

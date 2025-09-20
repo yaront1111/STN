@@ -69,6 +69,23 @@ public:
     void updateMapMatch(const Eigen::Vector3d& matched_position_ECEF, double uncertainty_m);
 
     /**
+     * Update with magnetometer measurement
+     */
+    void updateMagnetometer(const Eigen::Vector3d& mag_body,
+                           const Eigen::Vector3d& mag_ref_ECEF,
+                           const Eigen::Matrix3d& R_mag);
+
+    /**
+     * Update with barometric altitude
+     */
+    void updateBarometer(double altitude_msl, double noise_variance);
+
+    /**
+     * Zero Velocity Update (ZUPT) - constrains velocity when stationary
+     */
+    void updateZUPT(const Eigen::Matrix3d& R_vel);
+
+    /**
      * Get current state estimate (physical units)
      */
     State getState() const { return nominal_state_; }

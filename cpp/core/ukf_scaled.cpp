@@ -720,3 +720,153 @@ void ScaledUKF::updateMapMatch(const Eigen::Vector3d& matched_position_ECEF, dou
     std::cout << "Map match applied: correction = " << std::fixed << std::setprecision(1)
               << innovation.norm() << " m (K=" << std::setprecision(2) << K_pos << ")\n";
 }
+
+// Magnetometer update implementation
+void ScaledUKF::updateMagnetometer(const Eigen::Vector3d& mag_body,
+                                   const Eigen::Vector3d& mag_ref_ECEF,
+                                   const Eigen::Matrix3d& R_mag) {
+    if (config_.verbose) {
+        std::cout << "[ScaledUKF] Magnetometer update\n";
+    }
+
+    // Expected measurement in body frame
+    Eigen::Vector3d expected_mag_body = nominal_state_.q_ECEF_B.inverse() * mag_ref_ECEF;
+
+    // Innovation
+    Eigen::Vector3d innovation = mag_body - expected_mag_body;
+
+    // Measurement Jacobian (3x15)
+    // Magnetometer is sensitive to attitude errors
+    Eigen::Matrix<double, 3, ERROR_STATE_DIM> H = Eigen::Matrix<double, 3, ERROR_STATE_DIM>::Zero();
+
+    // Attitude sensitivity: d(mag_body)/d(theta)
+    // Using small angle approximation: δR ≈ I - [θ×]
+    Eigen::Matrix3d mag_ref_skew = UKFMathUtils::skewSymmetric(expected_mag_body);
+    H.block<3,3>(0, 6) = mag_ref_skew;  // Attitude error affects magnetometer
+
+    // Compute Kalman gain in physical space
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_physical = getCovariance();
+    Eigen::Matrix3d S_innovation = H * P_physical * H.transpose() + R_mag;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 3> K = P_physical * H.transpose() * S_innovation.inverse();
+
+    // State correction
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> dx = K * innovation;
+
+    // Apply correction to nominal state
+    nominal_state_ = applyErrorPhysical(nominal_state_, dx);
+
+    // Update covariance using Joseph form for numerical stability
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> I_KH =
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() - K * H;
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_updated =
+        I_KH * P_physical * I_KH.transpose() + K * R_mag * K.transpose();
+
+    // Convert back to scaled Cholesky factor
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> scales = scaler_.getScales();
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> D_inv = scales.asDiagonal().inverse();
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = D_inv * P_updated * D_inv;
+
+    // Cholesky decomposition
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
+    if (llt.info() == Eigen::Success) {
+        S_ = llt.matrixL();
+    } else {
+        std::cerr << "[ScaledUKF] Warning: Cholesky failed in magnetometer update\n";
+    }
+}
+
+// Barometric altitude update
+void ScaledUKF::updateBarometer(double altitude_msl, double noise_variance) {
+    if (config_.verbose) {
+        std::cout << "[ScaledUKF] Barometer update: " << altitude_msl << " m\n";
+    }
+
+    // Convert current position to LLA to get altitude
+    Eigen::Vector3d lla = UKFMathUtils::ecefToLla(nominal_state_.p_ECEF);
+    double expected_alt = lla(2);
+
+    // Innovation (scalar)
+    double innovation = altitude_msl - expected_alt;
+
+    // Measurement Jacobian (1x15)
+    // Barometer only measures altitude (vertical position)
+    Eigen::Matrix<double, 1, ERROR_STATE_DIM> H = Eigen::Matrix<double, 1, ERROR_STATE_DIM>::Zero();
+
+    // Compute altitude sensitivity to ECEF position
+    // Simplified: assume mostly vertical sensitivity
+    Eigen::Vector3d up_ECEF = nominal_state_.p_ECEF.normalized();
+    H.block<1,3>(0, 0) = up_ECEF.transpose();
+
+    // Kalman gain computation
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_physical = getCovariance();
+    double S_innovation = (H * P_physical * H.transpose())(0,0) + noise_variance;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> K = P_physical * H.transpose() / S_innovation;
+
+    // State correction
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> dx = K * innovation;
+
+    // Apply correction
+    nominal_state_ = applyErrorPhysical(nominal_state_, dx);
+
+    // Update covariance
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> I_KH =
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() - K * H;
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_updated =
+        I_KH * P_physical * I_KH.transpose() + K * noise_variance * K.transpose();
+
+    // Convert back to scaled Cholesky factor
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> scales = scaler_.getScales();
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> D_inv = scales.asDiagonal().inverse();
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = D_inv * P_updated * D_inv;
+
+    // Cholesky decomposition
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
+    if (llt.info() == Eigen::Success) {
+        S_ = llt.matrixL();
+    }
+}
+
+// Zero Velocity Update (ZUPT)
+void ScaledUKF::updateZUPT(const Eigen::Matrix3d& R_vel) {
+    if (config_.verbose) {
+        std::cout << "[ScaledUKF] ZUPT: constraining velocity to zero\n";
+    }
+
+    // Innovation: measured velocity (0) - estimated velocity
+    Eigen::Vector3d innovation = -nominal_state_.v_ECEF;
+
+    // Measurement Jacobian (3x15)
+    // ZUPT directly observes velocity
+    Eigen::Matrix<double, 3, ERROR_STATE_DIM> H = Eigen::Matrix<double, 3, ERROR_STATE_DIM>::Zero();
+    H.block<3,3>(0, 3) = Eigen::Matrix3d::Identity();  // Velocity observation
+
+    // Kalman gain
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_physical = getCovariance();
+    Eigen::Matrix3d S_innovation = H * P_physical * H.transpose() + R_vel;
+    Eigen::Matrix<double, ERROR_STATE_DIM, 3> K = P_physical * H.transpose() * S_innovation.inverse();
+
+    // State correction
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> dx = K * innovation;
+
+    // Apply correction
+    nominal_state_ = applyErrorPhysical(nominal_state_, dx);
+
+    // Update covariance using Joseph form
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> I_KH =
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() - K * H;
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_updated =
+        I_KH * P_physical * I_KH.transpose() + K * R_vel * K.transpose();
+
+    // Convert back to scaled Cholesky factor
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> scales = scaler_.getScales();
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> D_inv = scales.asDiagonal().inverse();
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = D_inv * P_updated * D_inv;
+
+    // Cholesky decomposition
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
+    if (llt.info() == Eigen::Success) {
+        S_ = llt.matrixL();
+    } else {
+        std::cerr << "[ScaledUKF] Warning: Cholesky failed in ZUPT\n";
+    }
+}

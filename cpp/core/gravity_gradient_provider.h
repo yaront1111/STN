@@ -25,6 +25,12 @@ public:
      * File format: spherical harmonic coefficients to degree 2190
      */
     bool loadEGM2020(const std::string& data_path);
+
+    /**
+     * Initialize with synthetic gravity model for testing
+     * Uses simplified Earth model with main spherical harmonics
+     */
+    bool initializeSynthetic();
     
     /**
      * Get gravity gradient tensor at position
@@ -32,6 +38,15 @@ public:
      * @return Full 3x3 gravity gradient tensor (Eötvös units)
      */
     GravityGradientTensor getGradient(const Eigen::Vector3d& pos_ECEF) const;
+
+    /**
+     * Get gravity gradient tensor at position (alternative name for compatibility)
+     * @param pos_ECEF Position in ECEF coordinates (meters)
+     * @param q_ECEF_B Body orientation quaternion (unused for now)
+     * @return Full 3x3 gravity gradient tensor as Eigen matrix
+     */
+    Eigen::Matrix3d getGradientTensor(const Eigen::Vector3d& pos_ECEF,
+                                      const Eigen::Quaterniond& q_ECEF_B = Eigen::Quaterniond::Identity()) const;
     
     /**
      * Get gravity anomaly at position

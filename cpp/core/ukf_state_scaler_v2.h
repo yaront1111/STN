@@ -81,6 +81,11 @@ public:
         return D_inv_;
     }
 
+    // Get the diagonal scaling factors as a vector
+    Eigen::Matrix<double, STATE_DIM, 1> getScales() const {
+        return D_.diagonal();
+    }
+
     // Compute condition number of a matrix
     double computeConditionNumber(const Eigen::Matrix<double, STATE_DIM, STATE_DIM>& M) const;
 

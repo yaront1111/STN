@@ -60,6 +60,9 @@ public:
     // Gravity computation
     static double getNormalGravity(double latitude_rad);  // WGS84 normal gravity
 
+    // Create skew-symmetric matrix from vector
+    static Eigen::Matrix3d skewSymmetric(const Eigen::Vector3d& v);
+
     // Error-state operations (for UKF sigma points)
     static State applyErrorToState(const State& nominal_state, 
                                   const Eigen::Matrix<double, 15, 1>& error_vector);

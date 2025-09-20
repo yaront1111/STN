@@ -66,48 +66,28 @@ target_link_libraries(test_gravity_map_match
     gravity_core
 )
 
-# Two-factor authentication test
-add_executable(test_two_factor
-    test_two_factor.cpp
+# Test executables - commented out until test files are created
+# add_executable(test_two_factor test_two_factor.cpp)
+# target_link_libraries(test_two_factor gravity_core)
+
+# add_executable(test_system_comprehensive test_system_comprehensive.cpp)
+# target_link_libraries(test_system_comprehensive gravity_core)
+
+# add_executable(test_scaled_ukf_gps_denied test_scaled_ukf_gps_denied.cpp)
+# target_link_libraries(test_scaled_ukf_gps_denied gravity_core)
+
+# add_executable(test_gps_denied_simple test_gps_denied_simple.cpp)
+# target_link_libraries(test_gps_denied_simple gravity_core)
+
+# add_executable(test_grade_b_plus test_grade_b_plus.cpp)
+# target_link_libraries(test_grade_b_plus gravity_core)
+
+# Comprehensive navigation runner with debug and logging
+add_executable(run_navigation_system
+    run_navigation_system.cpp
 )
 
-target_link_libraries(test_two_factor
-    gravity_core
-)
-
-# Comprehensive system test
-add_executable(test_system_comprehensive
-    test_system_comprehensive.cpp
-)
-
-target_link_libraries(test_system_comprehensive
-    gravity_core
-)
-
-# GPS-denied navigation test with ScaledUKF
-add_executable(test_scaled_ukf_gps_denied
-    test_scaled_ukf_gps_denied.cpp
-)
-
-target_link_libraries(test_scaled_ukf_gps_denied
-    gravity_core
-)
-
-# Simple GPS-denied demonstration
-add_executable(test_gps_denied_simple
-    test_gps_denied_simple.cpp
-)
-
-target_link_libraries(test_gps_denied_simple
-    gravity_core
-)
-
-# Grade B+ performance test
-add_executable(test_grade_b_plus
-    test_grade_b_plus.cpp
-)
-
-target_link_libraries(test_grade_b_plus
+target_link_libraries(run_navigation_system
     gravity_core
 )
 

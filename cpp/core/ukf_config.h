@@ -45,7 +45,7 @@ struct UKFConfig {
     // Adaptive Filtering (future enhancement)
     struct AdaptiveParams {
         bool enable_adaptive_Q = false;     // Adaptive process noise
-        bool enable_adaptive_R = false;     // Adaptive measurement noise  
+        bool enable_adaptive_R = false;     // Adaptive measurement noise
         double adaptation_rate = 0.01;      // Learning rate
         int innovation_window = 50;         // Window for innovation statistics
     } adaptive;
@@ -59,6 +59,9 @@ struct UKFConfig {
         int min_gradient_measurements = 50; // Minimum measurements for map match
     } grade_a;
     
+    // Debug and logging
+    bool verbose = false;  // Enable verbose output
+
     // Validation and bounds checking
     bool validate() const;
     void setDefaults();
