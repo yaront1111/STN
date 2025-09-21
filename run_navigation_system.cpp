@@ -51,6 +51,7 @@
 #include "cpp/core/terrain_correlator.h"
 #include "cpp/core/srtm_provider.h"
 #include "cpp/core/particle_filter.h"
+#include "cpp/core/adaptive_filter.h"
 
 namespace fs = std::filesystem;
 
@@ -842,6 +843,18 @@ int main(int argc, char** argv) {
     particle_filter.initialize(initial_state, initial_cov);
     logger.info("Particle filter initialized with " + std::to_string(pf_config.num_particles) + " particles");
 
+    // Initialize adaptive filter for IMU bias correction
+    AdaptiveFilter::Config af_config;
+    af_config.window_size = 100;
+    af_config.learning_rate = 0.01;
+    af_config.enable_outlier_rejection = true;
+    AdaptiveFilter adaptive_filter(af_config);
+
+    // Initialize gravity bias estimator
+    GravityBiasEstimator gravity_bias_estimator;
+
+    logger.info("Adaptive filters initialized for bias correction");
+
     // Simulation parameters
     const double dt = 0.01;  // 100 Hz
     const int steps = static_cast<int>(config.duration / dt);
@@ -915,6 +928,24 @@ int main(int argc, char** argv) {
         Eigen::Vector3d gyro_bias(0.0001, -0.0002, 0.00015);
         acc += acc_bias + Eigen::Vector3d(imu_noise(gen), imu_noise(gen), imu_noise(gen));
         gyro += gyro_bias + Eigen::Vector3d(imu_noise(gen), imu_noise(gen), imu_noise(gen));
+
+        // Update adaptive filter with raw measurements
+        adaptive_filter.updateBiasEstimate(acc, gyro);
+
+        // Apply adaptive corrections
+        acc = adaptive_filter.correctAccelerometer(acc);
+        gyro = adaptive_filter.correctGyroscope(gyro);
+
+        // Update scale factors based on current state (will be available after first predict)
+        if (step > 0) {
+            State last_state = ukf.getState();
+            adaptive_filter.updateScaleFactors(last_state);
+
+            // Update gravity bias estimator if nearly stationary
+            if (last_state.v_ECEF.norm() < 0.5) {
+                gravity_bias_estimator.updateStationary(acc);
+            }
+        }
 
         // UKF Prediction
         profiler.startTimer("ukf_predict");

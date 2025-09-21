@@ -36,6 +36,7 @@ add_library(gravity_core STATIC
     cpp/core/terrain_correlator.cpp
     cpp/core/srtm_provider.cpp
     cpp/core/particle_filter.cpp
+    cpp/core/adaptive_filter.cpp
 )
 
 target_include_directories(gravity_core PUBLIC
