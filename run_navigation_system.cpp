@@ -166,22 +166,22 @@ public:
                      const State& true_state) {
         if (sample_count_ % downsample_factor_ != 0) return;
 
-        double pos_error = (estimated_state.position - true_state.position).norm();
-        double vel_error = (estimated_state.velocity - true_state.velocity).norm();
+        double pos_error = (estimated_state.p_ECEF - true_state.p_ECEF).norm();
+        double vel_error = (estimated_state.v_ECEF - true_state.v_ECEF).norm();
 
         // Attitude error as quaternion angle difference
-        Eigen::Quaterniond q_error = estimated_state.attitude.inverse() * true_state.attitude;
+        Eigen::Quaterniond q_error = estimated_state.q_ECEF_B.inverse() * true_state.q_ECEF_B;
         double att_error = 2.0 * std::acos(std::abs(q_error.w()));
 
         state_data_file_ << timestamp << ","
-                        << estimated_state.position.x() << "," << estimated_state.position.y() << "," << estimated_state.position.z() << ","
-                        << estimated_state.velocity.x() << "," << estimated_state.velocity.y() << "," << estimated_state.velocity.z() << ","
-                        << estimated_state.attitude.w() << "," << estimated_state.attitude.x() << ","
-                        << estimated_state.attitude.y() << "," << estimated_state.attitude.z() << ","
-                        << true_state.position.x() << "," << true_state.position.y() << "," << true_state.position.z() << ","
-                        << true_state.velocity.x() << "," << true_state.velocity.y() << "," << true_state.velocity.z() << ","
-                        << true_state.attitude.w() << "," << true_state.attitude.x() << ","
-                        << true_state.attitude.y() << "," << true_state.attitude.z() << ","
+                        << estimated_state.p_ECEF.x() << "," << estimated_state.p_ECEF.y() << "," << estimated_state.p_ECEF.z() << ","
+                        << estimated_state.v_ECEF.x() << "," << estimated_state.v_ECEF.y() << "," << estimated_state.v_ECEF.z() << ","
+                        << estimated_state.q_ECEF_B.w() << "," << estimated_state.q_ECEF_B.x() << ","
+                        << estimated_state.q_ECEF_B.y() << "," << estimated_state.q_ECEF_B.z() << ","
+                        << true_state.p_ECEF.x() << "," << true_state.p_ECEF.y() << "," << true_state.p_ECEF.z() << ","
+                        << true_state.v_ECEF.x() << "," << true_state.v_ECEF.y() << "," << true_state.v_ECEF.z() << ","
+                        << true_state.q_ECEF_B.w() << "," << true_state.q_ECEF_B.x() << ","
+                        << true_state.q_ECEF_B.y() << "," << true_state.q_ECEF_B.z() << ","
                         << pos_error << "," << vel_error << "," << att_error << "\n";
     }
 
@@ -917,9 +917,9 @@ int main(int argc, char** argv) {
         Eigen::Vector3d true_pos = scenario->getTruePosition(t);
         Eigen::Vector3d true_vel = scenario->getTrueVelocity(t);
         State true_state;
-        true_state.position = true_pos;
-        true_state.velocity = true_vel;
-        true_state.attitude = Eigen::Quaterniond::Identity();  // Simplified for now
+        true_state.p_ECEF = true_pos;
+        true_state.v_ECEF = true_vel;
+        true_state.q_ECEF_B = Eigen::Quaterniond::Identity();  // Simplified for now
 
         // Log IMU data for ML training
         ml_logger.logIMUData(t, imu_sample, true_imu, acc_bias, gyro_bias);

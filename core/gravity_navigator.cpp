@@ -301,7 +301,7 @@ int main(int argc, char** argv) {
         
         // Update with CSAC (if available)
         if (csac && csac->hasNewData()) {
-            CSACMeasurement csac_meas = csac->read();
+            CSACInterface::CSACMeasurement csac_meas = csac->read();
             // Clock updates not yet implemented in stable UKF
             // TODO: Add clock state to UKF if needed
         }
