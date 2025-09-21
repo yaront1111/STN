@@ -50,6 +50,7 @@
 #include "cpp/core/gravity_map_matcher.h"
 #include "cpp/core/terrain_correlator.h"
 #include "cpp/core/srtm_provider.h"
+#include "cpp/core/particle_filter.h"
 
 namespace fs = std::filesystem;
 
@@ -136,7 +137,8 @@ public:
     void logGravityData(double timestamp,
                        const Eigen::Vector3d& position,
                        const Eigen::Matrix3d& gradient_tensor) {
-        if (sample_count_ % downsample_factor_ != 0) return;
+        static int gravity_sample_count = 0;
+        if (gravity_sample_count++ % downsample_factor_ != 0) return;
 
         // Convert ECEF to LLA for position
         double lat = std::atan2(position.z(), std::sqrt(position.x()*position.x() + position.y()*position.y())) * 180.0 / M_PI;
@@ -828,6 +830,18 @@ int main(int argc, char** argv) {
         // Note: Would load actual SRTM data in production
     }
 
+    // Initialize particle filter for robust multi-modal tracking
+    ParticleFilter::Config pf_config;
+    pf_config.num_particles = 500;
+    pf_config.initial_spread_m = 50.0;
+    pf_config.process_noise_pos = 0.5;
+    pf_config.process_noise_vel = 0.05;
+    pf_config.adaptive_particles = true;
+
+    ParticleFilter particle_filter(pf_config);
+    particle_filter.initialize(initial_state, initial_cov);
+    logger.info("Particle filter initialized with " + std::to_string(pf_config.num_particles) + " particles");
+
     // Simulation parameters
     const double dt = 0.01;  // 100 Hz
     const int steps = static_cast<int>(config.duration / dt);
@@ -909,6 +923,9 @@ int main(int argc, char** argv) {
         imu_sample.gyro_rps = gyro;
         ukf.predict(imu_sample, dt);
         profiler.endTimer("ukf_predict");
+
+        // Particle Filter Prediction for multi-modal tracking
+        particle_filter.predict(acc, gyro, dt);
 
         // Get current state
         State current_state = ukf.getState();
@@ -996,6 +1013,28 @@ int main(int argc, char** argv) {
             Eigen::Matrix3d R = Eigen::Matrix3d::Identity() * (gradient_noise_std * gradient_noise_std);
             ukf.updateGradient(gradient_measured, R);
             stats.gravity_updates++;
+
+            // Update particle filter for multi-hypothesis tracking
+            particle_filter.updateGravity(gradient_measured, gravity_provider.get());
+
+            // Perform map matching and get multiple hypotheses
+            auto map_match_result = particle_filter.performMapMatching(
+                gradient_measured, gravity_provider.get());
+
+            // Fuse particle filter estimate with UKF if confidence is high
+            if (map_match_result.confidence > 0.7 && !map_match_result.hypotheses.empty()) {
+                // Use best hypothesis to constrain UKF
+                State pf_state = map_match_result.best_estimate;
+                Eigen::Vector3d position_innovation = pf_state.p_ECEF - current_state.p_ECEF;
+
+                // Only apply correction if particle filter converged to reasonable solution
+                if (position_innovation.norm() < 100.0) {  // 100m threshold
+                    // Soft constraint: blend PF and UKF estimates
+                    current_state.p_ECEF = 0.7 * current_state.p_ECEF + 0.3 * pf_state.p_ECEF;
+                    // Note: setState not available in ScaledUKF, would need to add this method
+                    // For now, particle filter provides guidance but doesn't override UKF
+                }
+            }
 
             profiler.endTimer("gravity_update");
 
