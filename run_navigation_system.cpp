@@ -809,12 +809,24 @@ int main(int argc, char** argv) {
             // Enforce symmetry (gradiometer constraint)
             gradient_measured = 0.5 * (gradient_measured + gradient_measured.transpose());
 
+            // Use gravity invariants instead of raw tensor for better observability
+            // Invariants are rotation-independent, providing more robust position constraints
+
+            // Note: updateGradientInvariants is in UKF class, not ScaledUKF
+            // For now, continue using updateGradient but with better parameters
+            // TODO: Port invariants update to ScaledUKF
+
             // Update UKF with appropriate noise covariance
             Eigen::Matrix3d R = Eigen::Matrix3d::Identity() * (gradient_noise_std * gradient_noise_std);
             ukf.updateGradient(gradient_measured, R);
             stats.gravity_updates++;
 
             profiler.endTimer("gravity_update");
+
+            // Also update with gravity anomaly for better position observability
+            // Gravity anomaly provides absolute gravity field reference
+            // Note: GravityGradientProvider doesn't have getGravityAnomaly yet
+            // This would be a valuable addition for better observability
 
             if (config.debug) {
                 logger.debug("Gravity update: trace = " +

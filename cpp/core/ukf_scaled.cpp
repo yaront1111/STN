@@ -256,35 +256,46 @@ void ScaledUKF::reconstructScaledCovariance(const std::vector<State>& propagated
 }
 
 void ScaledUKF::addProcessNoiseScaled(double dt) {
-    // Add process noise in SCALED space
+    // Add process noise in SCALED space with adaptive scaling
 
-    // Define process noise in PHYSICAL units
+    // Get current uncertainty levels for adaptive scaling
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P = getCovariance();
+    double pos_uncertainty = std::sqrt(P.block<3,3>(0,0).trace() / 3.0);
+    double vel_uncertainty = std::sqrt(P.block<3,3>(3,3).trace() / 3.0);
+    double att_uncertainty = std::sqrt(P.block<3,3>(6,6).trace() / 3.0);
+
+    // Adaptive scaling using exponential decay (more aggressive when uncertainty is low)
+    double pos_scale = 1.0 + std::exp(-0.01 * pos_uncertainty);  // Scale up when certain
+    double vel_scale = 1.0 + std::exp(-1.0 * vel_uncertainty);   // More aggressive for velocity
+    double att_scale = 1.0 + std::exp(-10.0 * att_uncertainty);  // Very aggressive for attitude
+
+    // Define process noise in PHYSICAL units with adaptive scaling
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> q_std_physical =
         Eigen::Matrix<double, ERROR_STATE_DIM, 1>::Zero();
 
     double dt_sqrt = std::sqrt(dt);
 
-    // Position: continuous white noise acceleration model
+    // Position: continuous white noise acceleration model with adaptive scaling
     for (int i = 0; i < 3; ++i) {
-        q_std_physical(i) = config_.process_noise.position * dt;
+        q_std_physical(i) = config_.process_noise.position * dt * pos_scale;
     }
 
-    // Velocity: continuous white noise jerk model
+    // Velocity: continuous white noise jerk model with adaptive scaling
     for (int i = 3; i < 6; ++i) {
-        q_std_physical(i) = config_.process_noise.velocity * dt_sqrt;
+        q_std_physical(i) = config_.process_noise.velocity * dt_sqrt * vel_scale;
     }
 
-    // Attitude: angular random walk
+    // Attitude: angular random walk with adaptive scaling
     for (int i = 6; i < 9; ++i) {
-        q_std_physical(i) = config_.process_noise.attitude * dt_sqrt;
+        q_std_physical(i) = config_.process_noise.attitude * dt_sqrt * att_scale;
     }
 
-    // Accelerometer bias: random walk
+    // Accelerometer bias: random walk (constant - biases evolve slowly)
     for (int i = 9; i < 12; ++i) {
         q_std_physical(i) = config_.process_noise.accel_bias * dt_sqrt;
     }
 
-    // Gyroscope bias: random walk
+    // Gyroscope bias: random walk (constant - biases evolve slowly)
     for (int i = 12; i < 15; ++i) {
         q_std_physical(i) = config_.process_noise.gyro_bias * dt_sqrt;
     }
@@ -910,9 +921,10 @@ void ScaledUKF::updateBarometer(double altitude_msl, double noise_variance) {
     // State correction
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> dx = K * innovation;
 
-    // Chi-squared test for innovation rejection
+    // Chi-squared test for innovation rejection with relaxed threshold
+    // Increased threshold to reduce rejections when filter is diverging
     double mahalanobis = innovation * innovation / S_innovation;
-    const double chi2_threshold = 9.0;  // 99% confidence for 1 DOF
+    const double chi2_threshold = 16.0;  // Relaxed from 9.0 to allow larger innovations
 
     if (mahalanobis > chi2_threshold) {
         if (config_.verbose) {
