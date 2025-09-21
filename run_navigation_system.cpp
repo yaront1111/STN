@@ -63,6 +63,158 @@ void signalHandler(int signal) {
     }
 }
 
+// ML Data Logger for collecting training data
+class MLDataLogger {
+private:
+    std::ofstream imu_data_file_;
+    std::ofstream gravity_data_file_;
+    std::ofstream state_data_file_;
+    std::ofstream map_data_file_;
+    std::string data_dir_;
+    int sample_count_;
+    int downsample_factor_;
+
+public:
+    MLDataLogger(const std::string& data_dir = "ml/data", int downsample = 10)
+        : data_dir_(data_dir), sample_count_(0), downsample_factor_(downsample) {
+
+        // Create data directory structure
+        fs::create_directories(data_dir_ + "/imu");
+        fs::create_directories(data_dir_ + "/gravity");
+        fs::create_directories(data_dir_ + "/states");
+        fs::create_directories(data_dir_ + "/maps");
+
+        // Generate timestamp for data files
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        std::stringstream timestamp;
+        timestamp << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
+
+        // Open data files
+        imu_data_file_.open(data_dir_ + "/imu/imu_" + timestamp.str() + ".csv");
+        gravity_data_file_.open(data_dir_ + "/gravity/gravity_" + timestamp.str() + ".csv");
+        state_data_file_.open(data_dir_ + "/states/states_" + timestamp.str() + ".csv");
+        map_data_file_.open(data_dir_ + "/maps/map_features_" + timestamp.str() + ".csv");
+
+        // Write headers
+        imu_data_file_ << "timestamp,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,"
+                      << "true_acc_x,true_acc_y,true_acc_z,true_gyro_x,true_gyro_y,true_gyro_z,"
+                      << "bias_acc_x,bias_acc_y,bias_acc_z,bias_gyro_x,bias_gyro_y,bias_gyro_z\n";
+
+        gravity_data_file_ << "timestamp,lat,lon,alt,"
+                          << "Txx,Txy,Txz,Tyx,Tyy,Tyz,Tzx,Tzy,Tzz,"
+                          << "J2,J3,laplacian,horizontal_curvature,vertical_gradient\n";
+
+        state_data_file_ << "timestamp,"
+                        << "est_pos_x,est_pos_y,est_pos_z,est_vel_x,est_vel_y,est_vel_z,"
+                        << "est_q_w,est_q_x,est_q_y,est_q_z,"
+                        << "true_pos_x,true_pos_y,true_pos_z,true_vel_x,true_vel_y,true_vel_z,"
+                        << "true_q_w,true_q_x,true_q_y,true_q_z,"
+                        << "pos_error,vel_error,att_error\n";
+
+        map_data_file_ << "timestamp,lat,lon,"
+                       << "gravity_anomaly,terrain_height,magnetic_declination,"
+                       << "terrain_slope,terrain_aspect,terrain_roughness\n";
+    }
+
+    void logIMUData(double timestamp,
+                    const ImuSample& measured_imu,
+                    const ImuSample& true_imu,
+                    const Eigen::Vector3d& acc_bias,
+                    const Eigen::Vector3d& gyro_bias) {
+        if (sample_count_++ % downsample_factor_ != 0) return;
+
+        imu_data_file_ << timestamp << ","
+                      << measured_imu.acc_mps2.x() << "," << measured_imu.acc_mps2.y() << "," << measured_imu.acc_mps2.z() << ","
+                      << measured_imu.gyro_rps.x() << "," << measured_imu.gyro_rps.y() << "," << measured_imu.gyro_rps.z() << ","
+                      << true_imu.acc_mps2.x() << "," << true_imu.acc_mps2.y() << "," << true_imu.acc_mps2.z() << ","
+                      << true_imu.gyro_rps.x() << "," << true_imu.gyro_rps.y() << "," << true_imu.gyro_rps.z() << ","
+                      << acc_bias.x() << "," << acc_bias.y() << "," << acc_bias.z() << ","
+                      << gyro_bias.x() << "," << gyro_bias.y() << "," << gyro_bias.z() << "\n";
+    }
+
+    void logGravityData(double timestamp,
+                       const Eigen::Vector3d& position,
+                       const Eigen::Matrix3d& gradient_tensor) {
+        if (sample_count_ % downsample_factor_ != 0) return;
+
+        // Convert ECEF to LLA for position
+        double lat = std::atan2(position.z(), std::sqrt(position.x()*position.x() + position.y()*position.y())) * 180.0 / M_PI;
+        double lon = std::atan2(position.y(), position.x()) * 180.0 / M_PI;
+        double alt = position.norm() - 6371000.0; // Approximate altitude
+
+        // Calculate gravity invariants
+        double J2 = gradient_tensor.trace() * gradient_tensor.trace() - (gradient_tensor * gradient_tensor).trace();
+        double J3 = gradient_tensor.determinant();
+        double laplacian = gradient_tensor.trace();
+
+        // Calculate horizontal and vertical gradients
+        double horizontal_curvature = std::sqrt(gradient_tensor(0,0)*gradient_tensor(0,0) + gradient_tensor(1,1)*gradient_tensor(1,1));
+        double vertical_gradient = gradient_tensor(2,2);
+
+        gravity_data_file_ << timestamp << ","
+                         << lat << "," << lon << "," << alt << ","
+                         << gradient_tensor(0,0) << "," << gradient_tensor(0,1) << "," << gradient_tensor(0,2) << ","
+                         << gradient_tensor(1,0) << "," << gradient_tensor(1,1) << "," << gradient_tensor(1,2) << ","
+                         << gradient_tensor(2,0) << "," << gradient_tensor(2,1) << "," << gradient_tensor(2,2) << ","
+                         << J2 << "," << J3 << "," << laplacian << ","
+                         << horizontal_curvature << "," << vertical_gradient << "\n";
+    }
+
+    void logStateData(double timestamp,
+                     const State& estimated_state,
+                     const State& true_state) {
+        if (sample_count_ % downsample_factor_ != 0) return;
+
+        double pos_error = (estimated_state.position - true_state.position).norm();
+        double vel_error = (estimated_state.velocity - true_state.velocity).norm();
+
+        // Attitude error as quaternion angle difference
+        Eigen::Quaterniond q_error = estimated_state.attitude.inverse() * true_state.attitude;
+        double att_error = 2.0 * std::acos(std::abs(q_error.w()));
+
+        state_data_file_ << timestamp << ","
+                        << estimated_state.position.x() << "," << estimated_state.position.y() << "," << estimated_state.position.z() << ","
+                        << estimated_state.velocity.x() << "," << estimated_state.velocity.y() << "," << estimated_state.velocity.z() << ","
+                        << estimated_state.attitude.w() << "," << estimated_state.attitude.x() << ","
+                        << estimated_state.attitude.y() << "," << estimated_state.attitude.z() << ","
+                        << true_state.position.x() << "," << true_state.position.y() << "," << true_state.position.z() << ","
+                        << true_state.velocity.x() << "," << true_state.velocity.y() << "," << true_state.velocity.z() << ","
+                        << true_state.attitude.w() << "," << true_state.attitude.x() << ","
+                        << true_state.attitude.y() << "," << true_state.attitude.z() << ","
+                        << pos_error << "," << vel_error << "," << att_error << "\n";
+    }
+
+    void logMapFeatures(double timestamp,
+                       double lat, double lon,
+                       double gravity_anomaly,
+                       double terrain_height,
+                       double magnetic_declination,
+                       double terrain_slope,
+                       double terrain_aspect,
+                       double terrain_roughness) {
+        if (sample_count_ % downsample_factor_ != 0) return;
+
+        map_data_file_ << timestamp << "," << lat << "," << lon << ","
+                      << gravity_anomaly << "," << terrain_height << "," << magnetic_declination << ","
+                      << terrain_slope << "," << terrain_aspect << "," << terrain_roughness << "\n";
+    }
+
+    void flush() {
+        imu_data_file_.flush();
+        gravity_data_file_.flush();
+        state_data_file_.flush();
+        map_data_file_.flush();
+    }
+
+    ~MLDataLogger() {
+        imu_data_file_.close();
+        gravity_data_file_.close();
+        state_data_file_.close();
+        map_data_file_.close();
+    }
+};
+
 // Logging system
 enum class LogLevel {
     DEBUG = 0,
@@ -721,6 +873,10 @@ int main(int argc, char** argv) {
     performance_log << "time,rms_pos,avg_pos,max_pos,rms_vel,drift_rate,"
                     << "gravity_accept_rate,baro_accept_rate,mag_accept_rate\n";
 
+    // Initialize ML Data Logger for training data collection
+    MLDataLogger ml_logger("ml/data", 10); // Downsample by 10x for manageable data size
+    logger.info("ML data collection initialized, logging to ml/data/");
+
     // Main navigation loop
     auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -733,11 +889,18 @@ int main(int argc, char** argv) {
         Eigen::Vector3d acc, gyro;
         scenario->generateIMU(t, acc, gyro);
 
+        // Store true IMU for ML training
+        ImuSample true_imu;
+        true_imu.acc_mps2 = acc;
+        true_imu.gyro_rps = gyro;
+
         // Add IMU biases and noise
         std::mt19937 gen(step);
         std::normal_distribution<> imu_noise(0, 0.001);
-        acc += Eigen::Vector3d(imu_noise(gen), imu_noise(gen), imu_noise(gen));
-        gyro += Eigen::Vector3d(imu_noise(gen), imu_noise(gen), imu_noise(gen));
+        Eigen::Vector3d acc_bias(0.01, -0.005, 0.002);  // Realistic bias values
+        Eigen::Vector3d gyro_bias(0.0001, -0.0002, 0.00015);
+        acc += acc_bias + Eigen::Vector3d(imu_noise(gen), imu_noise(gen), imu_noise(gen));
+        gyro += gyro_bias + Eigen::Vector3d(imu_noise(gen), imu_noise(gen), imu_noise(gen));
 
         // UKF Prediction
         profiler.startTimer("ukf_predict");
@@ -753,6 +916,16 @@ int main(int argc, char** argv) {
         // Get true state for comparison
         Eigen::Vector3d true_pos = scenario->getTruePosition(t);
         Eigen::Vector3d true_vel = scenario->getTrueVelocity(t);
+        State true_state;
+        true_state.position = true_pos;
+        true_state.velocity = true_vel;
+        true_state.attitude = Eigen::Quaterniond::Identity();  // Simplified for now
+
+        // Log IMU data for ML training
+        ml_logger.logIMUData(t, imu_sample, true_imu, acc_bias, gyro_bias);
+
+        // Log state data for ML training
+        ml_logger.logStateData(t, current_state, true_state);
         double pre_update_error = (current_state.p_ECEF - true_pos).norm();
 
         // Check filter health periodically and reset if unhealthy
@@ -808,6 +981,9 @@ int main(int argc, char** argv) {
 
             // Enforce symmetry (gradiometer constraint)
             gradient_measured = 0.5 * (gradient_measured + gradient_measured.transpose());
+
+            // Log gravity data for ML training
+            ml_logger.logGravityData(t, current_state.p_ECEF, gradient_measured);
 
             // Use gravity invariants instead of raw tensor for better observability
             // Invariants are rotation-independent, providing more robust position constraints
@@ -907,6 +1083,18 @@ int main(int argc, char** argv) {
             // Add radar altimeter noise
             std::normal_distribution<> radar_noise(0, 2.0);  // 2m std dev
             radar_alt += radar_noise(gen);
+
+            // Calculate terrain features for ML training
+            double terrain_slope = std::abs(500.0 * 100 * std::cos(lla(0) * 100) * std::cos(lla(1) * 100));
+            double terrain_aspect = std::atan2(std::sin(lla(1) * 100), std::cos(lla(0) * 100));
+            double terrain_roughness = std::abs(500.0 * 100 * 100 * std::sin(lla(0) * 100) * std::sin(lla(1) * 100));
+
+            // Log map features for ML training
+            double gravity_anomaly = 20.0 * std::sin(lla(0) * 50) * std::cos(lla(1) * 50);  // mGal
+            double magnetic_declination = 5.0 * std::sin(lla(1) * 10);  // degrees
+            ml_logger.logMapFeatures(t, lla(0)*180/M_PI, lla(1)*180/M_PI,
+                                    gravity_anomaly, terrain_height, magnetic_declination,
+                                    terrain_slope, terrain_aspect, terrain_roughness);
 
             // Terrain matching provides position estimate
             // In reality, this would correlate radar altitude profile with terrain database
@@ -1029,6 +1217,9 @@ int main(int argc, char** argv) {
                            << stats.max_pos_error << "," << rms_vel_current << ","
                            << drift_rate << ","
                            << 1.0 << "," << 1.0 << "," << 1.0 << "\n";  // TODO: track accept rates
+
+            // Flush ML data periodically for real-time monitoring
+            ml_logger.flush();
         }
 
         profiler.endTimer("total_step");
