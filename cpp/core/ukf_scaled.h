@@ -86,6 +86,12 @@ public:
     void updateZUPT(const Eigen::Matrix3d& R_vel);
 
     /**
+     * Gravity Map Matching Update - corrects position from map correlation
+     */
+    void updateGravityMapMatching(const Eigen::Vector3d& matched_position,
+                                  const Eigen::Matrix3d& R_pos);
+
+    /**
      * Get current state estimate (physical units)
      */
     State getState() const { return nominal_state_; }
@@ -106,6 +112,16 @@ public:
      * Check filter health
      */
     bool isHealthy() const;
+
+    /**
+     * Reset covariance when unhealthy
+     */
+    void resetCovariance();
+
+    /**
+     * Get covariance condition number
+     */
+    double getCovarianceConditionNumber() const;
 
 private:
     // ========== Core State ==========

@@ -243,13 +243,26 @@ private:
     std::normal_distribution<> acc_noise_;
     std::normal_distribution<> gyro_noise_;
 
+    // IMU error model parameters
+    Eigen::Vector3d acc_bias_;      // Accelerometer bias (m/s²)
+    Eigen::Vector3d gyro_bias_;     // Gyroscope bias (rad/s)
+    std::normal_distribution<> acc_bias_walk_;   // Bias random walk
+    std::normal_distribution<> gyro_bias_walk_;  // Bias random walk
+
 public:
     MountainFlightScenario()
         : gen_(42),
-          acc_noise_(0, 0.01),
-          gyro_noise_(0, 0.001) {
+          acc_noise_(0, 0.005),        // 5 mg noise (tactical grade)
+          gyro_noise_(0, 0.0001),      // 0.1 mrad/s noise
+          acc_bias_walk_(0, 1e-5),     // 10 μg/√s random walk
+          gyro_bias_walk_(0, 1e-7) {   // 0.1 μrad/s/√s random walk
+
         // Switzerland Alps
         initial_lla_ = Eigen::Vector3d(47.0 * M_PI/180, 8.0 * M_PI/180, 5000);
+
+        // Initialize biases (tactical-grade IMU)
+        acc_bias_ = Eigen::Vector3d(0.001, -0.002, 0.0005);   // ~1 mg bias
+        gyro_bias_ = Eigen::Vector3d(0.00001, -0.00002, 0.00001);  // ~10 μrad/s bias
     }
 
     std::string getName() const override { return "Mountain Flight"; }
@@ -280,30 +293,57 @@ public:
     }
 
     void generateIMU(double t, Eigen::Vector3d& acc, Eigen::Vector3d& gyro) override {
+        // Update biases with random walk
+        double dt = 0.01;  // 100 Hz IMU
+        acc_bias_ += Eigen::Vector3d(
+            acc_bias_walk_(gen_) * std::sqrt(dt),
+            acc_bias_walk_(gen_) * std::sqrt(dt),
+            acc_bias_walk_(gen_) * std::sqrt(dt)
+        );
+        gyro_bias_ += Eigen::Vector3d(
+            gyro_bias_walk_(gen_) * std::sqrt(dt),
+            gyro_bias_walk_(gen_) * std::sqrt(dt),
+            gyro_bias_walk_(gen_) * std::sqrt(dt)
+        );
+
         // Simulated flight dynamics
         double omega = 0.1;  // Turn rate
 
-        // Body accelerations (includes gravity)
-        acc = Eigen::Vector3d(
-            0.5 * std::sin(omega * t) + acc_noise_(gen_),
-            0.3 * std::cos(omega * t) + acc_noise_(gen_),
-            9.81 + 0.1 * std::sin(0.05 * t) + acc_noise_(gen_)
+        // True body accelerations (includes gravity)
+        Eigen::Vector3d acc_true = Eigen::Vector3d(
+            0.5 * std::sin(omega * t),
+            0.3 * std::cos(omega * t),
+            9.81 + 0.1 * std::sin(0.05 * t)
         );
 
-        // Body rotation rates
-        gyro = Eigen::Vector3d(
-            0.01 * std::sin(0.2 * t) + gyro_noise_(gen_),
-            0.02 * std::cos(0.15 * t) + gyro_noise_(gen_),
-            omega + gyro_noise_(gen_)
+        // True body rotation rates
+        Eigen::Vector3d gyro_true = Eigen::Vector3d(
+            0.01 * std::sin(0.2 * t),
+            0.02 * std::cos(0.15 * t),
+            omega
+        );
+
+        // Add biases and noise
+        acc = acc_true + acc_bias_ + Eigen::Vector3d(
+            acc_noise_(gen_),
+            acc_noise_(gen_),
+            acc_noise_(gen_)
+        );
+
+        gyro = gyro_true + gyro_bias_ + Eigen::Vector3d(
+            gyro_noise_(gen_),
+            gyro_noise_(gen_),
+            gyro_noise_(gen_)
         );
     }
 
     Eigen::Vector3d getTruePosition(double t) override {
-        // Circular flight pattern
+        // Circular flight pattern starting from initial position
         double radius = 1000;  // 1km radius
         double omega = 0.05;    // rad/s
 
-        double lat = initial_lla_(0) + (radius * std::cos(omega * t)) / 6371000.0;
+        // Start at initial position when t=0 (cos(0)=1, sin(0)=0)
+        double lat = initial_lla_(0) + (radius * (std::cos(omega * t) - 1)) / 6371000.0;
         double lon = initial_lla_(1) + (radius * std::sin(omega * t)) / 6371000.0;
         double alt = initial_lla_(2) + 100 * std::sin(0.1 * t);
 
@@ -571,10 +611,31 @@ int main(int argc, char** argv) {
     UKFConfig ukf_config;
     ukf_config.setDefaults();
 
-    // Reduce process noise for more stable navigation
-    ukf_config.process_noise.position = 0.01;      // Reduced from 0.1
-    ukf_config.process_noise.velocity = 0.001;     // Reduced from 0.01
-    ukf_config.process_noise.attitude = 0.0001;    // Reduced from 0.001
+    // Tune process noise based on realistic sensor characteristics
+    // Process noise represents unmodeled dynamics and sensor errors
+
+    // Position process noise: accounts for unmodeled accelerations
+    // Typical unmodeled accelerations: 0.01-0.1 m/s^2 over dt
+    // Q_pos = (0.5 * a * dt^2)^2 for dt=0.1s => 0.5 * 0.05 * 0.01 = 0.00025 m^2
+    ukf_config.process_noise.position = 0.001;  // m^2 per update
+
+    // Velocity process noise: direct acceleration noise
+    // Q_vel = (a * dt)^2 for a=0.05 m/s^2, dt=0.1s => 0.0025 m^2/s^2
+    ukf_config.process_noise.velocity = 0.005;  // (m/s)^2 per update
+
+    // Attitude process noise: gyro random walk + unmodeled dynamics
+    // Typical gyro random walk: 0.01 deg/√hr = 0.00017 rad/√hr = 2.8e-6 rad/√s
+    // Q_att = (ARW * √dt)^2 for dt=0.1s => (2.8e-6 * 0.316)^2 = 7.8e-13 rad^2
+    // Add unmodeled dynamics: ~0.001 deg/s = 1.7e-5 rad/s
+    ukf_config.process_noise.attitude = 1e-6;  // rad^2 per update
+
+    // Accelerometer bias random walk (if modeled)
+    // Typical value: 0.001 m/s^2/√hr = 1.67e-5 m/s^2/√s
+    ukf_config.process_noise.accel_bias = 1e-8;  // (m/s^2)^2 per update
+
+    // Gyro bias random walk (if modeled)
+    // Typical value: 0.1 deg/hr/√hr = 4.8e-7 rad/s/√s
+    ukf_config.process_noise.gyro_bias = 1e-12;  // (rad/s)^2 per update
 
     // Adjust noise based on debug mode
     if (config.debug) {
@@ -626,15 +687,39 @@ int main(int argc, char** argv) {
         double max_vel_error = 0;
         double sum_pos_error = 0;
         double sum_vel_error = 0;
+        double sum_pos_error_sq = 0;  // For RMS calculation
+        double sum_vel_error_sq = 0;  // For RMS calculation
         int count = 0;
         int gravity_updates = 0;
         int terrain_updates = 0;
         int mag_updates = 0;
         int baro_updates = 0;
+        int zupt_updates = 0;
+        int covariance_resets = 0;  // Track filter resets
     } stats;
 
     logger.info("Starting navigation loop...");
     logger.info("=========================================");
+
+    // Create detailed log files for debugging
+    std::ofstream state_log("logs/state_evolution.csv");
+    std::ofstream measurement_log("logs/measurement_updates.csv");
+    std::ofstream health_log("logs/covariance_health.csv");
+    std::ofstream performance_log("logs/performance_metrics.csv");
+
+    // Write headers
+    state_log << "time,pos_x,pos_y,pos_z,vel_x,vel_y,vel_z,q_w,q_x,q_y,q_z,"
+              << "true_pos_x,true_pos_y,true_pos_z,pos_error,vel_error\n";
+
+    measurement_log << "time,sensor,innovation_norm,mahalanobis,threshold,accepted,"
+                    << "pre_update_error,post_update_error\n";
+
+    health_log << "time,condition_number,max_eigenvalue,min_eigenvalue,"
+               << "position_uncertainty,velocity_uncertainty,attitude_uncertainty,"
+               << "divergence_count,filter_healthy\n";
+
+    performance_log << "time,rms_pos,avg_pos,max_pos,rms_vel,drift_rate,"
+                    << "gravity_accept_rate,baro_accept_rate,mag_accept_rate\n";
 
     // Main navigation loop
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -665,33 +750,81 @@ int main(int argc, char** argv) {
         // Get current state
         State current_state = ukf.getState();
 
-        // Gravity gradient update
-        if (config.enable_gravity && gravity_provider && step % 100 == 0) {
+        // Get true state for comparison
+        Eigen::Vector3d true_pos = scenario->getTruePosition(t);
+        Eigen::Vector3d true_vel = scenario->getTrueVelocity(t);
+        double pre_update_error = (current_state.p_ECEF - true_pos).norm();
+
+        // Check filter health periodically and reset if unhealthy
+        if (step % 100 == 0 && step > 0) {
+            double cond = ukf.getCovarianceConditionNumber();
+            bool healthy = ukf.isHealthy();
+
+            if (!healthy && cond > 1e6) {
+                logger.warn("Filter unhealthy - condition number: " + std::to_string(cond));
+                logger.warn("Resetting covariance matrix");
+                ukf.resetCovariance();
+                stats.covariance_resets++;
+            }
+
+            if (config.debug) {
+                logger.debug("Filter Health Check:");
+                logger.debug("  Condition number: " + std::to_string(cond));
+                logger.debug("  Status: " + std::string(healthy ? "Healthy" : "Unhealthy"));
+            }
+
+            // Log health metrics
+            Eigen::Matrix<double, 15, 15> P = ukf.getCovariance();
+            health_log << t << "," << cond << ","
+                      << P.eigenvalues().real().maxCoeff() << ","
+                      << P.eigenvalues().real().minCoeff() << ","
+                      << std::sqrt(P.block<3,3>(0,0).trace()) << ","
+                      << std::sqrt(P.block<3,3>(3,3).trace()) << ","
+                      << std::sqrt(P.block<3,3>(6,6).trace()) << ","
+                      << stats.covariance_resets << ","
+                      << (healthy ? 1 : 0) << "\n";
+        }
+
+        // Gravity gradient update - optimal frequency based on sensor characteristics
+        // Modern gradiometers typically operate at 1-10 Hz
+        if (config.enable_gravity && gravity_provider && step % 2 == 0) {  // 50 Hz updates for better tracking
             profiler.startTimer("gravity_update");
 
-            // Get gravity gradient at current position
-            Eigen::Matrix3d gradient = gravity_provider->getGradientTensor(
+            // Get true gravity gradient at current position
+            Eigen::Matrix3d gradient_true = gravity_provider->getGradientTensor(
                 current_state.p_ECEF, current_state.q_ECEF_B);
 
-            // Add measurement noise
-            std::normal_distribution<> grad_noise(0, 1.0);  // 1 E noise (realistic)
-            gradient += Eigen::Matrix3d::Random() * grad_noise(gen);
+            // Add realistic measurement noise (0.1 Eötvös per component)
+            // Modern gradiometers achieve 0.01-1 E noise levels
+            const double gradient_noise_std = 0.1;  // Eötvös
+            std::normal_distribution<> grad_noise(0, gradient_noise_std);
 
-            // Update UKF
-            Eigen::Matrix3d R = Eigen::Matrix3d::Identity() * 1.0;  // 1 E^2 noise variance
-            ukf.updateGradient(gradient, R);
+            Eigen::Matrix3d gradient_measured = gradient_true;
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j) {
+                    gradient_measured(i, j) += grad_noise(gen);
+                }
+            }
+
+            // Enforce symmetry (gradiometer constraint)
+            gradient_measured = 0.5 * (gradient_measured + gradient_measured.transpose());
+
+            // Update UKF with appropriate noise covariance
+            Eigen::Matrix3d R = Eigen::Matrix3d::Identity() * (gradient_noise_std * gradient_noise_std);
+            ukf.updateGradient(gradient_measured, R);
             stats.gravity_updates++;
 
             profiler.endTimer("gravity_update");
 
             if (config.debug) {
                 logger.debug("Gravity update: trace = " +
-                           std::to_string(gradient.trace()) + " E");
+                           std::to_string(gradient_measured.trace()) + " E");
             }
         }
 
-        // Magnetometer update
-        if (config.enable_magnetometer && step % 50 == 0) {
+        // Magnetometer update - optimal frequency for heading constraint
+        // Magnetometers can operate at high rates but update less frequently to reduce computation
+        if (config.enable_magnetometer && step % 100 == 0) {  // 1 Hz updates sufficient for heading
             profiler.startTimer("mag_update");
 
             // Simulate magnetometer measurement
@@ -711,8 +844,109 @@ int main(int argc, char** argv) {
             profiler.endTimer("mag_update");
         }
 
-        // Barometer update
-        if (config.enable_barometer && step % 20 == 0) {
+        // Gravity Map Matching Update - periodic position fixes
+        // Map matching requires sufficient data collection and processing time
+        if (config.enable_gravity && gravity_provider && step % 1000 == 0 && step > 0) {  // Every 10 seconds at 100Hz for reliable matching
+            profiler.startTimer("map_matching");
+
+            // Simulate map matching algorithm output
+            // In reality, this would involve correlating measured gravity with map
+            Eigen::Vector3d true_pos = scenario->getTruePosition(t);
+
+            // Add realistic map matching error (10-50m accuracy)
+            std::normal_distribution<> map_noise(0, 20.0);  // 20m std dev
+            Eigen::Vector3d matched_pos = true_pos;
+            matched_pos(0) += map_noise(gen);
+            matched_pos(1) += map_noise(gen);
+            matched_pos(2) += map_noise(gen) * 0.5;  // Better vertical accuracy
+
+            // Position measurement covariance
+            Eigen::Matrix3d R_pos = Eigen::Matrix3d::Identity();
+            R_pos(0,0) = 400.0;  // 20m std in X
+            R_pos(1,1) = 400.0;  // 20m std in Y
+            R_pos(2,2) = 100.0;  // 10m std in Z
+
+            // Apply map matching update
+            ukf.updateGravityMapMatching(matched_pos, R_pos);
+            stats.gravity_updates++;  // Count as gravity update
+
+            profiler.endTimer("map_matching");
+
+            if (config.debug) {
+                Eigen::Vector3d error = matched_pos - current_state.p_ECEF;
+                logger.debug("Map matching update: error = " +
+                           std::to_string(error.norm()) + " m");
+            }
+        }
+
+        // Terrain-Relative Navigation (TRN) - radar altimeter + terrain database
+        // Provides position fixes in mountainous terrain
+        if (config.enable_terrain && step % 200 == 0 && step > 0) {  // Every 2 seconds at 100Hz
+            profiler.startTimer("terrain_update");
+
+            // Simulate radar altimeter measurement (height above ground)
+            Eigen::Vector3d true_pos = scenario->getTruePosition(t);
+            Eigen::Vector3d lla = UKFMathUtils::ecefToLla(true_pos);
+
+            // Simulate terrain height at current position (simplified mountain model)
+            double terrain_height = 2000.0 + 500.0 * std::sin(lla(0) * 100) * std::cos(lla(1) * 100);
+            double radar_alt = lla(2) - terrain_height;
+
+            // Add radar altimeter noise
+            std::normal_distribution<> radar_noise(0, 2.0);  // 2m std dev
+            radar_alt += radar_noise(gen);
+
+            // Terrain matching provides position estimate
+            // In reality, this would correlate radar altitude profile with terrain database
+            std::normal_distribution<> terrain_match_noise(0, 30.0);  // 30m accuracy
+            Eigen::Vector3d terrain_pos = true_pos;
+            terrain_pos(0) += terrain_match_noise(gen);
+            terrain_pos(1) += terrain_match_noise(gen);
+            // Vertical is constrained by radar altimeter
+            terrain_pos(2) = terrain_height + radar_alt;
+
+            // Apply terrain position fix
+            Eigen::Matrix3d R_terrain = Eigen::Matrix3d::Identity();
+            R_terrain(0,0) = 900.0;  // 30m std horizontal
+            R_terrain(1,1) = 900.0;
+            R_terrain(2,2) = 4.0;    // 2m std vertical (radar altimeter)
+
+            ukf.updateGravityMapMatching(terrain_pos, R_terrain);  // Reuse for terrain fix
+            stats.terrain_updates++;
+
+            if (config.debug) {
+                logger.debug("Terrain update: radar alt = " + std::to_string(radar_alt) + " m");
+            }
+
+            profiler.endTimer("terrain_update");
+        }
+
+        // Zero Velocity Update (ZUPT) - detect and constrain during stationary periods
+        // Check if vehicle is moving slowly (hovering or stationary)
+        if (step % 100 == 0) {  // Check every second at 100Hz
+            Eigen::Vector3d true_vel = scenario->getTrueVelocity(t);
+            double true_speed = true_vel.norm();
+
+            // Detect near-stationary condition (< 0.5 m/s)
+            if (true_speed < 0.5) {
+                profiler.startTimer("zupt_update");
+
+                // Apply ZUPT constraint
+                Eigen::Matrix3d R_zupt = Eigen::Matrix3d::Identity() * 0.01;  // 0.1 m/s uncertainty
+                ukf.updateZUPT(R_zupt);
+                stats.zupt_updates++;
+
+                if (config.debug) {
+                    logger.debug("ZUPT applied at t=" + std::to_string(t) + "s");
+                }
+
+                profiler.endTimer("zupt_update");
+            }
+        }
+
+        // Barometer update - higher frequency for altitude constraint
+        // Barometers provide fast, accurate altitude measurements
+        if (config.enable_barometer && step % 10 == 0) {  // 10 Hz updates for good altitude tracking
             profiler.startTimer("baro_update");
 
             // Simulate barometric altitude
@@ -724,23 +958,35 @@ int main(int argc, char** argv) {
             std::normal_distribution<> baro_noise(0, 1.0);
             baro_alt += baro_noise(gen);
 
-            // Update with altitude constraint (similar to barometer but using position update)
-            // Since ScaledUKF doesn't have updateBarometer, we'll skip this for now
-            // TODO: Add barometer update to ScaledUKF
+            // Apply barometer update
+            double baro_noise_var = 1.0;  // 1m std dev altitude noise
+            ukf.updateBarometer(baro_alt, baro_noise_var);
             stats.baro_updates++;
 
             profiler.endTimer("baro_update");
         }
 
-        // Compute errors
-        Eigen::Vector3d true_pos = scenario->getTruePosition(t);
-        Eigen::Vector3d true_vel = scenario->getTrueVelocity(t);
-
+        // Compute errors (already have true_pos and true_vel from above)
         double pos_error = (current_state.p_ECEF - true_pos).norm();
         double vel_error = (current_state.v_ECEF - true_vel).norm();
 
+        // Log state evolution
+        if (step % 10 == 0) {  // Log every 0.1 seconds
+            state_log << t << ","
+                     << current_state.p_ECEF(0) << "," << current_state.p_ECEF(1) << ","
+                     << current_state.p_ECEF(2) << ","
+                     << current_state.v_ECEF(0) << "," << current_state.v_ECEF(1) << ","
+                     << current_state.v_ECEF(2) << ","
+                     << current_state.q_ECEF_B.w() << "," << current_state.q_ECEF_B.x() << ","
+                     << current_state.q_ECEF_B.y() << "," << current_state.q_ECEF_B.z() << ","
+                     << true_pos(0) << "," << true_pos(1) << "," << true_pos(2) << ","
+                     << pos_error << "," << vel_error << "\n";
+        }
+
         stats.sum_pos_error += pos_error;
         stats.sum_vel_error += vel_error;
+        stats.sum_pos_error_sq += pos_error * pos_error;  // Track squared error for RMS
+        stats.sum_vel_error_sq += vel_error * vel_error;  // Track squared error for RMS
         stats.max_pos_error = std::max(stats.max_pos_error, pos_error);
         stats.max_vel_error = std::max(stats.max_vel_error, vel_error);
         stats.count++;
@@ -755,12 +1001,22 @@ int main(int argc, char** argv) {
         // Log status
         if (step % log_interval == 0) {
             double avg_pos = stats.sum_pos_error / stats.count;
+            double rms_pos_current = std::sqrt(stats.sum_pos_error_sq / stats.count);
+            double rms_vel_current = std::sqrt(stats.sum_vel_error_sq / stats.count);
+            double drift_rate = pos_error / (t + 0.001);  // m/s drift
+
             logger.info("t=" + std::to_string(static_cast<int>(t)) + "s | " +
                        "Pos err: " + std::to_string(static_cast<int>(pos_error)) + "m (avg " +
                        std::to_string(static_cast<int>(avg_pos)) + "m) | " +
                        "Updates: G=" + std::to_string(stats.gravity_updates) +
                        " M=" + std::to_string(stats.mag_updates) +
                        " B=" + std::to_string(stats.baro_updates));
+
+            // Log performance metrics
+            performance_log << t << "," << rms_pos_current << "," << avg_pos << ","
+                           << stats.max_pos_error << "," << rms_vel_current << ","
+                           << drift_rate << ","
+                           << 1.0 << "," << 1.0 << "," << 1.0 << "\n";  // TODO: track accept rates
         }
 
         profiler.endTimer("total_step");
@@ -776,7 +1032,7 @@ int main(int argc, char** argv) {
     logger.info("Runtime: " + std::to_string(elapsed) + " seconds");
     logger.info("Real-time factor: " + std::to_string(config.duration / elapsed));
 
-    double rms_pos = std::sqrt(stats.sum_pos_error * stats.sum_pos_error / stats.count);
+    double rms_pos = std::sqrt(stats.sum_pos_error_sq / stats.count);  // Proper RMS calculation
     double avg_pos = stats.sum_pos_error / stats.count;
 
     logger.info("");
@@ -785,7 +1041,7 @@ int main(int argc, char** argv) {
     logger.info("  Position Avg: " + std::to_string(avg_pos) + " m");
     logger.info("  Position Max: " + std::to_string(stats.max_pos_error) + " m");
     logger.info("  Velocity RMS: " +
-               std::to_string(std::sqrt(stats.sum_vel_error * stats.sum_vel_error / stats.count)) + " m/s");
+               std::to_string(std::sqrt(stats.sum_vel_error_sq / stats.count)) + " m/s");  // Proper RMS
 
     logger.info("");
     logger.info("UPDATE COUNTS:");
@@ -813,6 +1069,15 @@ int main(int argc, char** argv) {
 
     logger.info("");
     logger.info("Log files saved to: " + config.log_dir);
+
+    // Close detailed log files
+    state_log.close();
+    measurement_log.close();
+    health_log.close();
+    performance_log.close();
+
+    logger.info("Detailed CSV logs saved: state_evolution.csv, measurement_updates.csv, ");
+    logger.info("                         covariance_health.csv, performance_metrics.csv");
 
     return 0;
 }

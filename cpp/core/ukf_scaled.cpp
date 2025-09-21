@@ -468,6 +468,38 @@ bool ScaledUKF::isHealthy() const {
     return (cond < 1e6) && (divergence_count_ < 10);
 }
 
+double ScaledUKF::getCovarianceConditionNumber() const {
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = S_ * S_.transpose();
+    return scaler_.computeConditionNumber(P_scaled);
+}
+
+void ScaledUKF::resetCovariance() {
+    if (config_.verbose) {
+        std::cout << "[ScaledUKF] Resetting covariance due to poor health\n";
+    }
+
+    // Reset to reasonable uncertainties in scaled space
+    S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+
+    // Position: 50m uncertainty (scaled by 0.1 => 5 in scaled space)
+    S_.block<3,3>(0,0) *= 5.0;
+
+    // Velocity: 5 m/s uncertainty (scaled by 1 => 5 in scaled space)
+    S_.block<3,3>(3,3) *= 5.0;
+
+    // Attitude: 0.1 rad uncertainty (scaled by 10 => 1 in scaled space)
+    S_.block<3,3>(6,6) *= 1.0;
+
+    // Accel bias: 0.01 m/s² uncertainty (scaled by 1000 => 10 in scaled space)
+    S_.block<3,3>(9,9) *= 10.0;
+
+    // Gyro bias: 0.001 rad/s uncertainty (scaled by 100000 => 100 in scaled space)
+    S_.block<3,3>(12,12) *= 100.0;
+
+    // Reset divergence counter
+    divergence_count_ = 0;
+}
+
 Eigen::Matrix<double, ScaledUKF::ERROR_STATE_DIM, ScaledUKF::ERROR_STATE_DIM>
 ScaledUKF::getCovariance() const {
     // Return covariance in PHYSICAL units
@@ -878,6 +910,18 @@ void ScaledUKF::updateBarometer(double altitude_msl, double noise_variance) {
     // State correction
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> dx = K * innovation;
 
+    // Chi-squared test for innovation rejection
+    double mahalanobis = innovation * innovation / S_innovation;
+    const double chi2_threshold = 9.0;  // 99% confidence for 1 DOF
+
+    if (mahalanobis > chi2_threshold) {
+        if (config_.verbose) {
+            std::cout << "[ScaledUKF] Barometer innovation rejected (chi² = "
+                     << mahalanobis << " > " << chi2_threshold << ")\n";
+        }
+        return;
+    }
+
     // Apply correction
     nominal_state_ = applyErrorPhysical(nominal_state_, dx);
 
@@ -941,5 +985,84 @@ void ScaledUKF::updateZUPT(const Eigen::Matrix3d& R_vel) {
         S_ = llt.matrixL();
     } else {
         std::cerr << "[ScaledUKF] Warning: Cholesky failed in ZUPT\n";
+    }
+}
+
+// Gravity Map Matching Update
+void ScaledUKF::updateGravityMapMatching(const Eigen::Vector3d& matched_position,
+                                         const Eigen::Matrix3d& R_pos) {
+    if (config_.verbose) {
+        std::cout << "[ScaledUKF] Map Matching: updating position from gravity map correlation\n";
+    }
+
+    // Innovation: matched position - estimated position
+    Eigen::Vector3d innovation = matched_position - nominal_state_.p_ECEF;
+
+    // Check innovation magnitude for outlier rejection
+    double innovation_norm = innovation.norm();
+    if (innovation_norm > 1000.0) {  // 1km threshold
+        if (config_.verbose) {
+            std::cout << "[ScaledUKF] Map matching rejected: innovation too large ("
+                     << innovation_norm << " m)\n";
+        }
+        return;
+    }
+
+    // Measurement Jacobian (3x15)
+    // Map matching directly observes position
+    Eigen::Matrix<double, 3, ERROR_STATE_DIM> H = Eigen::Matrix<double, 3, ERROR_STATE_DIM>::Zero();
+    H.block<3,3>(0, 0) = Eigen::Matrix3d::Identity();  // Position observation
+
+    // Kalman gain
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_physical = getCovariance();
+    Eigen::Matrix3d S_innovation = H * P_physical * H.transpose() + R_pos;
+
+    // Use pseudo-inverse for numerical stability
+    Eigen::JacobiSVD<Eigen::Matrix3d> svd(S_innovation, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    const double tolerance = 1e-9 * std::max(1.0, svd.singularValues()(0));
+
+    Eigen::Vector3d singular_inv = svd.singularValues();
+    for (int i = 0; i < 3; ++i) {
+        singular_inv(i) = (singular_inv(i) > tolerance) ? 1.0 / singular_inv(i) : 0.0;
+    }
+    Eigen::Matrix3d S_inv = svd.matrixV() * singular_inv.asDiagonal() * svd.matrixU().transpose();
+
+    Eigen::Matrix<double, ERROR_STATE_DIM, 3> K = P_physical * H.transpose() * S_inv;
+
+    // State correction
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> dx = K * innovation;
+
+    // Apply correction with damping for large corrections
+    double damping_factor = 1.0;
+    if (innovation_norm > 100.0) {  // Apply damping for corrections > 100m
+        damping_factor = 100.0 / innovation_norm;
+    }
+    dx *= damping_factor;
+
+    // Apply correction
+    nominal_state_ = applyErrorPhysical(nominal_state_, dx);
+
+    // Update covariance using Joseph form
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> I_KH =
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity() - K * H;
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_updated =
+        I_KH * P_physical * I_KH.transpose() + K * R_pos * K.transpose();
+
+    // Convert back to scaled Cholesky factor
+    Eigen::Matrix<double, ERROR_STATE_DIM, 1> scales = scaler_.getScales();
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> D_inv = scales.asDiagonal().inverse();
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = D_inv * P_updated * D_inv;
+
+    // Cholesky decomposition
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
+    if (llt.info() == Eigen::Success) {
+        S_ = llt.matrixL();
+    } else {
+        std::cerr << "[ScaledUKF] Warning: Cholesky failed in map matching\n";
+    }
+
+    if (config_.verbose) {
+        std::cout << "[ScaledUKF] Map matching applied: correction = "
+                 << (dx.head<3>() * damping_factor).norm() << " m\n";
     }
 }
