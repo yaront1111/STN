@@ -1,9 +1,9 @@
 {
-  "imu_files": 2,
-  "gravity_files": 2,
-  "state_files": 2,
-  "total_imu_samples": 1800,
-  "total_gravity_samples": 900,
-  "total_state_samples": 1800,
-  "ready_for_training": false
+  "imu_files": 25,
+  "gravity_files": 25,
+  "state_files": 25,
+  "total_imu_samples": 107400,
+  "total_gravity_samples": 53700,
+  "total_state_samples": 107400,
+  "ready_for_training": true
 }

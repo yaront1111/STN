@@ -52,6 +52,7 @@
 #include "cpp/core/srtm_provider.h"
 #include "cpp/core/particle_filter.h"
 #include "cpp/core/adaptive_filter.h"
+#include "cpp/ml/python_bridge.h"
 
 namespace fs = std::filesystem;
 
@@ -63,6 +64,14 @@ void signalHandler(int signal) {
         std::cout << "\n[INFO] Received interrupt signal, shutting down gracefully...\n";
         g_running = false;
     }
+}
+
+// Helper function to convert vector to string for logging
+std::string vectorToString(const Eigen::Vector3d& vec) {
+    std::stringstream ss;
+    ss << "[" << std::fixed << std::setprecision(6)
+       << vec(0) << ", " << vec(1) << ", " << vec(2) << "]";
+    return ss.str();
 }
 
 // ML Data Logger for collecting training data
@@ -831,6 +840,14 @@ int main(int argc, char** argv) {
         // Note: Would load actual SRTM data in production
     }
 
+    // Initialize ML Corrector for IMU bias correction
+    logger.info("Initializing ML inference engine...");
+    if (ml::MLCorrector::getInstance().initialize()) {
+        logger.info("ML inference server started successfully");
+    } else {
+        logger.warn("ML inference not available - continuing without ML corrections");
+    }
+
     // Initialize particle filter for robust multi-modal tracking
     ParticleFilter::Config pf_config;
     pf_config.num_particles = 500;
@@ -947,11 +964,49 @@ int main(int argc, char** argv) {
             }
         }
 
-        // UKF Prediction
+        // FIX: Don't pre-correct IMU data - instead update UKF bias estimates
+        Eigen::Vector3d acc_raw = acc;
+        Eigen::Vector3d gyro_raw = gyro;
+
+        // Get ML bias corrections but don't apply them to measurements
+        if (ml::MLCorrector::getInstance().isAvailable()) {
+            profiler.startTimer("ml_inference");
+            auto ml_correction = ml::MLCorrector::getInstance().getLastCorrection();
+
+            // If we have high-confidence ML corrections, update UKF bias states
+            if (ml_correction.ready && ml_correction.confidence > 0.8) {
+                // Get current UKF state
+                State current_state = ukf.getState();
+
+                // FIX: Use exponential moving average with smaller alpha for smoother updates
+                double alpha = 0.02 * ml_correction.confidence;  // Reduced from 0.1 to 0.02
+                current_state.b_a = (1.0 - alpha) * current_state.b_a + alpha * ml_correction.acc_bias;
+                current_state.b_g = (1.0 - alpha) * current_state.b_g + alpha * ml_correction.gyro_bias;
+
+                // Update UKF state with corrected biases
+                // Note: This is a soft constraint - UKF can still adjust if needed
+                ukf.updateBiases(current_state.b_a, current_state.b_g);
+
+                // Log ML correction for debugging
+                if (config.debug && step % 100 == 0) {
+                    logger.debug("ML Bias Update - Confidence: " + std::to_string(ml_correction.confidence) +
+                               " Acc bias: " + vectorToString(ml_correction.acc_bias) +
+                               " Gyro bias: " + vectorToString(ml_correction.gyro_bias));
+                }
+            }
+
+            // Still call correctIMU to update ML buffer (but don't use corrected values)
+            Eigen::Vector3d dummy_acc = acc;
+            Eigen::Vector3d dummy_gyro = gyro;
+            ml::MLCorrector::getInstance().correctIMU(dummy_acc, dummy_gyro);
+            profiler.endTimer("ml_inference");
+        }
+
+        // UKF Prediction with RAW IMU data (let UKF handle bias correction internally)
         profiler.startTimer("ukf_predict");
         ImuSample imu_sample;
-        imu_sample.acc_mps2 = acc;
-        imu_sample.gyro_rps = gyro;
+        imu_sample.acc_mps2 = acc_raw;  // Use raw measurements
+        imu_sample.gyro_rps = gyro_raw;  // Use raw measurements
         ukf.predict(imu_sample, dt);
         profiler.endTimer("ukf_predict");
 
@@ -1139,7 +1194,7 @@ int main(int argc, char** argv) {
 
         // Terrain-Relative Navigation (TRN) - radar altimeter + terrain database
         // Provides position fixes in mountainous terrain
-        if (config.enable_terrain && step % 200 == 0 && step > 0) {  // Every 2 seconds at 100Hz
+        if (config.enable_terrain && step % 100 == 0 && step > 0) {  // FIX: Every 1 second instead of 2s
             profiler.startTimer("terrain_update");
 
             // Simulate radar altimeter measurement (height above ground)
@@ -1351,6 +1406,9 @@ int main(int argc, char** argv) {
 
     logger.info("Detailed CSV logs saved: state_evolution.csv, measurement_updates.csv, ");
     logger.info("                         covariance_health.csv, performance_metrics.csv");
+
+    // Clean shutdown of ML system
+    ml::MLCorrector::getInstance().shutdown();
 
     return 0;
 }

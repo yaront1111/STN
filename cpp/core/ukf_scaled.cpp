@@ -55,7 +55,7 @@ void ScaledUKF::init(const State& x0_physical,
             } else if (i < 12) {
                 P0_fixed(i,i) = 1e-6;     // Accel bias: (0.001 m/s²)^2
             } else {
-                P0_fixed(i,i) = 1e-10;    // Gyro bias: (1e-5 rad/s)^2
+                P0_fixed(i,i) = 1e-8;     // Gyro bias: (1e-4 rad/s)^2 - FIX: was 1e-10
             }
         }
     }
@@ -102,8 +102,8 @@ void ScaledUKF::init(const State& x0_physical,
         S_.block<3,3>(0,0) *= 2.0;  // Position: 20m in physical = 2 in scaled
         S_.block<3,3>(3,3) *= 1.0;  // Velocity: 1 m/s
         S_.block<3,3>(6,6) *= 1.0;  // Attitude: 0.1 rad
-        S_.block<3,3>(9,9) *= 1.0;  // Accel bias
-        S_.block<3,3>(12,12) *= 1.0; // Gyro bias
+        S_.block<3,3>(9,9) *= 1.0;  // Accel bias: 0.001 m/s²
+        S_.block<3,3>(12,12) *= 1.0; // Gyro bias: 1e-5 rad/s
     } else {
         S_ = llt.matrixL();
         std::cout << "\n✓ Cholesky factorization successful in scaled space\n";
@@ -247,8 +247,8 @@ void ScaledUKF::reconstructScaledCovariance(const std::vector<State>& propagated
             S_.block<3,3>(0,0) *= 2.0;  // Position: 20m in physical = 2 in scaled
             S_.block<3,3>(3,3) *= 1.0;  // Velocity: 1 m/s
             S_.block<3,3>(6,6) *= 1.0;  // Attitude: 0.1 rad
-            S_.block<3,3>(9,9) *= 1.0;  // Accel bias
-            S_.block<3,3>(12,12) *= 1.0; // Gyro bias
+            S_.block<3,3>(9,9) *= 1.0;  // Accel bias: 0.001 m/s²
+            S_.block<3,3>(12,12) *= 1.0; // Gyro bias: 1e-5 rad/s
         }
     }
 
@@ -264,10 +264,11 @@ void ScaledUKF::addProcessNoiseScaled(double dt) {
     double vel_uncertainty = std::sqrt(P.block<3,3>(3,3).trace() / 3.0);
     double att_uncertainty = std::sqrt(P.block<3,3>(6,6).trace() / 3.0);
 
-    // Adaptive scaling using exponential decay (more aggressive when uncertainty is low)
-    double pos_scale = 1.0 + std::exp(-0.01 * pos_uncertainty);  // Scale up when certain
-    double vel_scale = 1.0 + std::exp(-1.0 * vel_uncertainty);   // More aggressive for velocity
-    double att_scale = 1.0 + std::exp(-10.0 * att_uncertainty);  // Very aggressive for attitude
+    // FIX: Use bounded linear scaling instead of aggressive exponential
+    // Scale between 0.5 and 2.0 based on uncertainty levels
+    double pos_scale = std::min(2.0, std::max(0.5, 1.0 + 0.01 * (10.0 - pos_uncertainty)));
+    double vel_scale = std::min(2.0, std::max(0.5, 1.0 + 0.1 * (1.0 - vel_uncertainty)));
+    double att_scale = std::min(2.0, std::max(0.5, 1.0 + 1.0 * (0.1 - att_uncertainty)));
 
     // Define process noise in PHYSICAL units with adaptive scaling
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> q_std_physical =
@@ -424,17 +425,43 @@ void ScaledUKF::monitorHealth() const {
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = S_ * S_.transpose();
     double cond = scaler_.computeConditionNumber(P_scaled);
 
-    // CRITICAL: If condition number is too high, reset covariance
-    if (cond > 1e8 || std::isinf(cond) || std::isnan(cond)) {
-        std::cout << "CRITICAL: Resetting covariance due to poor conditioning: " << cond << "\n";
+    // FIX: More tolerant threshold with adaptive regularization
+    // Only reset when truly necessary
+    auto P_physical = getCovariance();
+    double gyro_bias_magnitude = std::sqrt(P_physical.block<3,3>(12,12).trace() / 3.0);
+    double accel_bias_magnitude = std::sqrt(P_physical.block<3,3>(9,9).trace() / 3.0);
 
-        // Reset to well-conditioned diagonal matrix
-        const_cast<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>&>(S_) =
-            Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+    bool needs_reset = false;
+    if (cond > 1e8 || std::isinf(cond) || std::isnan(cond)) {  // Raised back to 1e8
+        std::cout << "CRITICAL: Poor conditioning detected: " << cond << "\n";
+        needs_reset = true;
+    }
+    if (gyro_bias_magnitude > 0.01) {  // 0.01 rad/s is excessive
+        std::cout << "CRITICAL: Gyro bias runaway detected: " << gyro_bias_magnitude << " rad/s\n";
+        needs_reset = true;
+    }
+    if (accel_bias_magnitude > 1.0) {  // 1 m/s² is excessive
+        std::cout << "CRITICAL: Accel bias runaway detected: " << accel_bias_magnitude << " m/s²\n";
+        needs_reset = true;
+    }
 
-        // Reset divergence count
-        const_cast<int&>(divergence_count_) = 0;
-        const_cast<double&>(last_condition_number_) = 1.0;
+    // Adaptive regularization when condition number is high but not critical
+    if (cond > 1e6 && cond < 1e8 && !needs_reset) {
+        // Add adaptive regularization to improve conditioning
+        double regularization = 1e-8 * (cond / 1e6);  // Scale regularization with condition number
+        Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = S_ * S_.transpose();
+        P_scaled += regularization * Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+
+        // Recompute S_ with regularized covariance
+        Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
+        if (llt.info() == Eigen::Success) {
+            const_cast<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>&>(S_) = llt.matrixL();
+        }
+    }
+
+    if (needs_reset) {
+        std::cout << "Resetting covariance to healthy state\n";
+        const_cast<ScaledUKF*>(this)->resetCovariance();
         return;
     }
 
@@ -476,7 +503,13 @@ bool ScaledUKF::isHealthy() const {
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = S_ * S_.transpose();
     double cond = scaler_.computeConditionNumber(P_scaled);
 
-    return (cond < 1e6) && (divergence_count_ < 10);
+    // FIX: Use stricter health criteria
+    auto P_physical = getCovariance();
+    double gyro_bias_magnitude = std::sqrt(P_physical.block<3,3>(12,12).trace() / 3.0);
+    double accel_bias_magnitude = std::sqrt(P_physical.block<3,3>(9,9).trace() / 3.0);
+
+    return (cond < 1e5) && (divergence_count_ < 5) &&
+           (gyro_bias_magnitude < 0.001) && (accel_bias_magnitude < 0.1);
 }
 
 double ScaledUKF::getCovarianceConditionNumber() const {
@@ -490,22 +523,24 @@ void ScaledUKF::resetCovariance() {
     }
 
     // Reset to reasonable uncertainties in scaled space
+    // CRITICAL FIX: Use proper scaled values based on scaler definitions
     S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
 
-    // Position: 50m uncertainty (scaled by 0.1 => 5 in scaled space)
+    // Position: 50m uncertainty (scaled by 10m => 5.0 in scaled space)
     S_.block<3,3>(0,0) *= 5.0;
 
-    // Velocity: 5 m/s uncertainty (scaled by 1 => 5 in scaled space)
+    // Velocity: 5 m/s uncertainty (scaled by 1 m/s => 5.0 in scaled space)
     S_.block<3,3>(3,3) *= 5.0;
 
-    // Attitude: 0.1 rad uncertainty (scaled by 10 => 1 in scaled space)
+    // Attitude: 0.1 rad uncertainty (scaled by 0.1 rad => 1.0 in scaled space)
     S_.block<3,3>(6,6) *= 1.0;
 
-    // Accel bias: 0.01 m/s² uncertainty (scaled by 1000 => 10 in scaled space)
-    S_.block<3,3>(9,9) *= 10.0;
+    // Accel bias: 0.001 m/s² uncertainty (scaled by 0.001 m/s² => 1.0 in scaled space)
+    S_.block<3,3>(9,9) *= 1.0;
 
-    // Gyro bias: 0.001 rad/s uncertainty (scaled by 100000 => 100 in scaled space)
-    S_.block<3,3>(12,12) *= 100.0;
+    // Gyro bias: 1e-5 rad/s uncertainty (scaled by 1e-5 rad/s => 1.0 in scaled space)
+    // FIX: Was 100.0 which caused huge P_scaled(12,12) = 10000!
+    S_.block<3,3>(12,12) *= 1.0;
 
     // Reset divergence counter
     divergence_count_ = 0;
@@ -516,6 +551,48 @@ ScaledUKF::getCovariance() const {
     // Return covariance in PHYSICAL units
     Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = S_ * S_.transpose();
     return scaler_.unscaleCovariance(P_scaled);
+}
+
+void ScaledUKF::updateBiases(const Eigen::Vector3d& acc_bias, const Eigen::Vector3d& gyro_bias) {
+    // Soft update of bias estimates with external corrections
+    // This helps prevent bias runaway when ML provides corrections
+
+    // Limit the magnitude of bias updates to prevent instability
+    const double max_acc_bias = 0.01;   // 10 mg max bias
+    const double max_gyro_bias = 0.001; // 1 mrad/s max bias
+
+    Eigen::Vector3d limited_acc_bias = acc_bias;
+    Eigen::Vector3d limited_gyro_bias = gyro_bias;
+
+    // Clamp bias magnitudes
+    if (limited_acc_bias.norm() > max_acc_bias) {
+        limited_acc_bias = limited_acc_bias.normalized() * max_acc_bias;
+    }
+    if (limited_gyro_bias.norm() > max_gyro_bias) {
+        limited_gyro_bias = limited_gyro_bias.normalized() * max_gyro_bias;
+    }
+
+    // Update nominal state biases
+    nominal_state_.b_a = limited_acc_bias;
+    nominal_state_.b_g = limited_gyro_bias;
+
+    // Optionally reduce uncertainty in bias estimates since ML provides corrections
+    // This prevents the filter from estimating large biases when ML is correcting them
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled = S_ * S_.transpose();
+
+    // Reduce bias uncertainty (indices 9-14 in error state)
+    for (int i = 9; i < 15; ++i) {
+        P_scaled(i,i) *= 0.9;  // Reduce uncertainty by 10%
+    }
+
+    // Recompute Cholesky factor
+    P_scaled = 0.5 * (P_scaled + P_scaled.transpose());  // Ensure symmetry
+    P_scaled += 1e-9 * Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
+    if (llt.info() == Eigen::Success) {
+        S_ = llt.matrixL();
+    }
 }
 
 void ScaledUKF::updateGradient(const Eigen::Matrix3d& measured_gradient, const Eigen::Matrix3d& R) {
@@ -687,10 +764,28 @@ void ScaledUKF::updateGradient(const Eigen::Matrix3d& measured_gradient, const E
     P_scaled = I_KH * P_scaled * I_KH.transpose() + K_scaled * R_flat * K_scaled.transpose();
 
     // Recompute Cholesky factor
-    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_scaled, 1e-9);
+    // FIX: Don't use enforcePositiveDefinite - it resets to inappropriate values
+    // Just add small regularization and compute Cholesky
+    P_scaled = 0.5 * (P_scaled + P_scaled.transpose());  // Ensure symmetry
+    P_scaled += 1e-9 * Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+
     Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
     if (llt.info() == Eigen::Success) {
         S_ = llt.matrixL();
+    } else {
+        // Use eigendecomposition for more robust factorization
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> es(P_scaled);
+        if (es.info() == Eigen::Success) {
+            Eigen::VectorXd eigenvalues = es.eigenvalues();
+            for (int i = 0; i < ERROR_STATE_DIM; ++i) {
+                if (eigenvalues(i) < 1e-9) {
+                    eigenvalues(i) = 1e-9;
+                }
+            }
+            Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> sqrt_D =
+                eigenvalues.array().sqrt().matrix().asDiagonal();
+            S_ = es.eigenvectors() * sqrt_D;
+        }
     }
 }
 
@@ -763,10 +858,28 @@ void ScaledUKF::updateAnomaly(double measured_anomaly_mgal, double noise_mgal) {
     P_scaled = I_KH * P_scaled * I_KH.transpose() + K_scaled * K_scaled.transpose() * R_scalar;
 
     // Recompute Cholesky factor
-    UKFMathUtils::enforcePositiveDefinite<ERROR_STATE_DIM>(P_scaled, 1e-9);
+    // FIX: Don't use enforcePositiveDefinite - it resets to inappropriate values
+    // Just add small regularization and compute Cholesky
+    P_scaled = 0.5 * (P_scaled + P_scaled.transpose());  // Ensure symmetry
+    P_scaled += 1e-9 * Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+
     Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
     if (llt.info() == Eigen::Success) {
         S_ = llt.matrixL();
+    } else {
+        // Use eigendecomposition for more robust factorization
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> es(P_scaled);
+        if (es.info() == Eigen::Success) {
+            Eigen::VectorXd eigenvalues = es.eigenvalues();
+            for (int i = 0; i < ERROR_STATE_DIM; ++i) {
+                if (eigenvalues(i) < 1e-9) {
+                    eigenvalues(i) = 1e-9;
+                }
+            }
+            Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> sqrt_D =
+                eigenvalues.array().sqrt().matrix().asDiagonal();
+            S_ = es.eigenvectors() * sqrt_D;
+        }
     }
 }
 

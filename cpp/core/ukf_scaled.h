@@ -123,6 +123,12 @@ public:
      */
     double getCovarianceConditionNumber() const;
 
+    /**
+     * Update bias estimates with external corrections (e.g., from ML)
+     * This is a soft update that adjusts the nominal state biases
+     */
+    void updateBiases(const Eigen::Vector3d& acc_bias, const Eigen::Vector3d& gyro_bias);
+
 private:
     // ========== Core State ==========
     State nominal_state_;  // Physical state (unscaled)

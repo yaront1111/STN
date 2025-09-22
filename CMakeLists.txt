@@ -37,12 +37,14 @@ add_library(gravity_core STATIC
     cpp/core/srtm_provider.cpp
     cpp/core/particle_filter.cpp
     cpp/core/adaptive_filter.cpp
+    cpp/ml/python_bridge.cpp
 )
 
 target_include_directories(gravity_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/core
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/hardware
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ml
 )
 
 target_link_libraries(gravity_core 

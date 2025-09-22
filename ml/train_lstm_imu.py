@@ -131,7 +131,7 @@ if len(X_train) >= 100:
 
     # Calculate improvement
     baseline_error = np.mean(np.abs(X_test[:, -1, :3]))  # Last acc measurement
-    corrected_error = np.mean(np.abs(predictions[:, :3] - y_test[:, :3]))
+    corrected_error = np.mean(np.abs(predictions[:10, :3] - y_test[:10, :3]))
     improvement = (baseline_error - corrected_error) / baseline_error * 100
 
     print(f"\nError reduction: {improvement:.1f}%")

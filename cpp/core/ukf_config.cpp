@@ -45,12 +45,12 @@ void UKFConfig::setDefaults() {
     beta = 2.0;
     kappa = 0.0;
     
-    // Conservative process noise
-    process_noise.position = 0.1;
-    process_noise.velocity = 0.01;
-    process_noise.attitude = 0.001;
-    process_noise.accel_bias = 1e-6;
-    process_noise.gyro_bias = 1e-8;
+    // FIX: Use improved process noise values from getBalanced
+    process_noise.position = 0.001;    // Reduced for stability
+    process_noise.velocity = 0.01;     // Already good
+    process_noise.attitude = 0.0001;   // Reduced for stability
+    process_noise.accel_bias = 1e-6;   // Already good
+    process_noise.gyro_bias = 1e-8;    // Already good
     process_noise.clock_drift = 1e-9;
     process_noise.clock_freq = 1e-12;
     
@@ -92,16 +92,16 @@ void UKFConfig::setGradeAOptimal() {
     beta = 2.0;       // Gaussian assumption
     kappa = 0.0;      // Standard setting
 
-    // Balanced process noise - avoid both collapse and explosion
-    process_noise.position = 0.01;     // 0.01 m/s^1.5 - moderate drift
-    process_noise.velocity = 0.1;      // 0.1 m/s^2.5 - realistic IMU
-    process_noise.attitude = 0.001;    // 0.001 rad/s^1.5 - tactical grade
-    process_noise.accel_bias = 1e-5;   // 1e-5 m/s^3.5 - slow drift
-    process_noise.gyro_bias = 1e-7;    // 1e-7 rad/s^2.5 - stable gyros
+    // FIX: Reduced process noise for better stability with ML corrections
+    process_noise.position = 0.001;    // Reduced 10x: 0.001 m/s^1.5
+    process_noise.velocity = 0.01;     // Reduced 10x: 0.01 m/s^2.5
+    process_noise.attitude = 0.0001;   // Reduced 10x: 0.0001 rad/s^1.5
+    process_noise.accel_bias = 1e-6;   // Reduced 10x: 1e-6 m/s^3.5
+    process_noise.gyro_bias = 1e-8;    // Reduced 10x: 1e-8 rad/s^2.5
     
-    // Calibrated measurement noise - FIXED for numerical stability
-    // These values must be large enough to prevent singular covariance matrices
-    measurement_noise.gravity_gradient = 10.0;     // 10 Eötvös noise (tensor values are ~50 E)
+    // FIX: Reduced measurement noise for more effective updates
+    // Lower values make measurements more trusted
+    measurement_noise.gravity_gradient = 1.0;      // Reduced from 10.0 to 1.0 Eötvös
     measurement_noise.gravity_anomaly = 1.0;       // 1 mGal anomaly noise
     measurement_noise.magnetometer = 50e-9;        // 50 nT magnetometer noise (Tesla)
     measurement_noise.barometer = 5.0;             // 5m barometer altitude noise
@@ -112,7 +112,7 @@ void UKFConfig::setGradeAOptimal() {
     numerical.innovation_outlier_chi2 = 7.815;     // 95% confidence instead of 99%
     
     // Grade A specific settings
-    grade_a.map_match_interval = 5.0;              // More frequent map matching
+    grade_a.map_match_interval = 1.0;              // FIX: Map match every 1s instead of 5s
     grade_a.min_gradient_measurements = 30;        // Lower threshold for faster matching
     
     std::cout << "UKF configured for Grade A+ performance\n";
