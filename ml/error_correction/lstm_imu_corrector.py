@@ -261,11 +261,11 @@ class CombinedIMULoss(nn.Module):
     def __init__(self,
                  bias_weight: float = 1.0,
                  scale_weight: float = 1.0,
-                 physics_weight: float = 0.1):
+                 physics_weight: float = 0.0):  # Disabled for flight
         super(CombinedIMULoss, self).__init__()
         self.bias_weight = bias_weight
         self.scale_weight = scale_weight
-        self.physics_weight = physics_weight
+        self.physics_weight = 0.0  # Force disabled - invalid for dynamic flight
 
     def forward(self, predictions, targets, raw_imu):
         """
@@ -292,15 +292,14 @@ class CombinedIMULoss(nn.Module):
         # Scale factor loss (MSE with emphasis near 1.0)
         scale_loss = torch.mean((pred_scales - true_scales) ** 2)
 
-        # Physics-based loss: corrected accelerometer should have ~9.8 m/s² magnitude at rest
-        corrected_acc = (raw_imu[:, -1, :3] - pred_biases[:, :3]) * pred_scales[:, :3]
-        acc_magnitude = torch.norm(corrected_acc, dim=1)
-        physics_loss = torch.mean((acc_magnitude - 9.81) ** 2)
+        # REMOVED: Physics-based loss was incorrect for dynamic flight
+        # The 9.81 m/s² constraint is only valid when stationary
+        # During flight, acceleration includes vehicle dynamics
+        # physics_loss = 0.0  # Disabled
 
-        # Combined loss
+        # Combined loss (physics loss removed for flight scenarios)
         total_loss = (self.bias_weight * bias_loss +
-                     self.scale_weight * scale_loss +
-                     self.physics_weight * physics_loss)
+                     self.scale_weight * scale_loss)
 
         return total_loss
 

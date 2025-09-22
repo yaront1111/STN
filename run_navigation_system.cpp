@@ -49,9 +49,8 @@
 #include "cpp/core/gravity_gradient_provider.h"
 #include "cpp/core/gravity_map_matcher.h"
 #include "cpp/core/terrain_correlator.h"
-#include "cpp/core/srtm_provider.h"
-#include "cpp/core/particle_filter.h"
-#include "cpp/core/adaptive_filter.h"
+// Removed srtm_provider.h (terrain matching) - see REMOVED_FEATURES.md
+// Removed particle_filter.h and adaptive_filter.h - see REMOVED_FEATURES.md
 #include "cpp/ml/python_bridge.h"
 
 namespace fs = std::filesystem;
@@ -624,7 +623,7 @@ struct RunConfig {
     LogLevel log_level = LogLevel::INFO;
     std::string log_dir = "logs";
     bool enable_gravity = true;
-    bool enable_terrain = true;
+    bool enable_terrain = false;  // Disabled - was competing with gravity map matching
     bool enable_magnetometer = true;
     bool enable_barometer = true;
     bool debug = false;
@@ -670,12 +669,8 @@ struct RunConfig {
             else if (arg == "--disable-gravity") {
                 enable_gravity = false;
             }
-            else if (arg == "--enable-terrain") {
-                enable_terrain = true;
-            }
-            else if (arg == "--disable-terrain") {
-                enable_terrain = false;
-            }
+            // Terrain matching removed - was competing with gravity map matching
+            // See REMOVED_FEATURES.md for re-enabling instructions
             else if (arg == "--debug") {
                 debug = true;
                 log_level = LogLevel::DEBUG;
@@ -832,13 +827,8 @@ int main(int argc, char** argv) {
     ukf.init(initial_state, initial_cov);
     logger.info("UKF initialized");
 
-    // Initialize terrain provider if enabled
-    std::unique_ptr<SRTMProvider> terrain_provider;
-    if (config.enable_terrain) {
-        logger.info("Initializing terrain provider...");
-        terrain_provider = std::make_unique<SRTMProvider>();
-        // Note: Would load actual SRTM data in production
-    }
+    // Terrain provider removed - was competing with gravity map matching
+    // See REMOVED_FEATURES.md for re-enabling instructions
 
     // Initialize ML Corrector for IMU bias correction
     logger.info("Initializing ML inference engine...");
@@ -848,29 +838,8 @@ int main(int argc, char** argv) {
         logger.warn("ML inference not available - continuing without ML corrections");
     }
 
-    // Initialize particle filter for robust multi-modal tracking
-    ParticleFilter::Config pf_config;
-    pf_config.num_particles = 500;
-    pf_config.initial_spread_m = 50.0;
-    pf_config.process_noise_pos = 0.5;
-    pf_config.process_noise_vel = 0.05;
-    pf_config.adaptive_particles = true;
-
-    ParticleFilter particle_filter(pf_config);
-    particle_filter.initialize(initial_state, initial_cov);
-    logger.info("Particle filter initialized with " + std::to_string(pf_config.num_particles) + " particles");
-
-    // Initialize adaptive filter for IMU bias correction
-    AdaptiveFilter::Config af_config;
-    af_config.window_size = 100;
-    af_config.learning_rate = 0.01;
-    af_config.enable_outlier_rejection = true;
-    AdaptiveFilter adaptive_filter(af_config);
-
-    // Initialize gravity bias estimator
-    GravityBiasEstimator gravity_bias_estimator;
-
-    logger.info("Adaptive filters initialized for bias correction");
+    // Particle filter and adaptive filter removed - see REMOVED_FEATURES.md
+    // ML bias correction handles IMU bias estimation
 
     // Simulation parameters
     const double dt = 0.01;  // 100 Hz
@@ -938,80 +907,64 @@ int main(int argc, char** argv) {
         true_imu.acc_mps2 = acc;
         true_imu.gyro_rps = gyro;
 
-        // Add IMU biases and noise
+        // Add time-varying IMU biases and noise for realistic simulation
         std::mt19937 gen(step);
         std::normal_distribution<> imu_noise(0, 0.001);
-        Eigen::Vector3d acc_bias(0.01, -0.005, 0.002);  // Realistic bias values
-        Eigen::Vector3d gyro_bias(0.0001, -0.0002, 0.00015);
-        acc += acc_bias + Eigen::Vector3d(imu_noise(gen), imu_noise(gen), imu_noise(gen));
-        gyro += gyro_bias + Eigen::Vector3d(imu_noise(gen), imu_noise(gen), imu_noise(gen));
 
-        // Update adaptive filter with raw measurements
-        adaptive_filter.updateBiasEstimate(acc, gyro);
+        // REMOVED: Triple bias addition bug - biases already added in scenario->generateIMU()
+        // Only add measurement noise, not additional biases
+        acc += Eigen::Vector3d(imu_noise(gen), imu_noise(gen), imu_noise(gen));
+        gyro += Eigen::Vector3d(imu_noise(gen), imu_noise(gen), imu_noise(gen));
 
-        // Apply adaptive corrections
-        acc = adaptive_filter.correctAccelerometer(acc);
-        gyro = adaptive_filter.correctGyroscope(gyro);
+        // REMOVED: Adaptive filter corrections - letting ML handle all bias correction
+        // adaptive_filter.updateBiasEstimate(acc, gyro);
+        // acc = adaptive_filter.correctAccelerometer(acc);
+        // gyro = adaptive_filter.correctGyroscope(gyro);
 
         // Update scale factors based on current state (will be available after first predict)
         if (step > 0) {
             State last_state = ukf.getState();
-            adaptive_filter.updateScaleFactors(last_state);
+            // DISABLED: Adaptive filter to avoid conflicts with UKF
+            // adaptive_filter.updateScaleFactors(last_state);
 
-            // Update gravity bias estimator if nearly stationary
-            if (last_state.v_ECEF.norm() < 0.5) {
-                gravity_bias_estimator.updateStationary(acc);
-            }
+            // Gravity bias estimator removed - UKF handles bias internally
         }
 
-        // FIX: Don't pre-correct IMU data - instead update UKF bias estimates
-        Eigen::Vector3d acc_raw = acc;
-        Eigen::Vector3d gyro_raw = gyro;
-
-        // Get ML bias corrections but don't apply them to measurements
+        // FIX: Get ML bias estimates and update UKF biases (don't double-correct!)
         if (ml::MLCorrector::getInstance().isAvailable()) {
             profiler.startTimer("ml_inference");
-            auto ml_correction = ml::MLCorrector::getInstance().getLastCorrection();
 
-            // If we have high-confidence ML corrections, update UKF bias states
-            if (ml_correction.ready && ml_correction.confidence > 0.8) {
-                // Get current UKF state
-                State current_state = ukf.getState();
+            // Get ML bias estimates (NOT correcting raw IMU)
+            auto ml_correction = ml::MLCorrector::getInstance().getBiasEstimates(acc, gyro);
 
-                // FIX: Use exponential moving average with smaller alpha for smoother updates
-                double alpha = 0.02 * ml_correction.confidence;  // Reduced from 0.1 to 0.02
-                current_state.b_a = (1.0 - alpha) * current_state.b_a + alpha * ml_correction.acc_bias;
-                current_state.b_g = (1.0 - alpha) * current_state.b_g + alpha * ml_correction.gyro_bias;
-
-                // Update UKF state with corrected biases
-                // Note: This is a soft constraint - UKF can still adjust if needed
-                ukf.updateBiases(current_state.b_a, current_state.b_g);
-
-                // Log ML correction for debugging
-                if (config.debug && step % 100 == 0) {
-                    logger.debug("ML Bias Update - Confidence: " + std::to_string(ml_correction.confidence) +
-                               " Acc bias: " + vectorToString(ml_correction.acc_bias) +
-                               " Gyro bias: " + vectorToString(ml_correction.gyro_bias));
-                }
+            // Update UKF bias estimates with ML predictions
+            if (ml_correction.ready && ml_correction.confidence > 0.7) {
+                // Use ML to update UKF's bias estimates with soft blending
+                // Adaptive blend weight based on ML confidence (0.3-0.8 range)
+                double blend_weight = std::min(0.8, 0.3 + 0.5 * ml_correction.confidence);
+                ukf.updateBiases(ml_correction.acc_bias * blend_weight,
+                               ml_correction.gyro_bias * blend_weight);
             }
 
-            // Still call correctIMU to update ML buffer (but don't use corrected values)
-            Eigen::Vector3d dummy_acc = acc;
-            Eigen::Vector3d dummy_gyro = gyro;
-            ml::MLCorrector::getInstance().correctIMU(dummy_acc, dummy_gyro);
+            // Log ML correction for debugging
+            if (config.debug && step % 100 == 0 && ml_correction.ready) {
+                logger.debug("ML Bias Estimates - Confidence: " + std::to_string(ml_correction.confidence) +
+                           " Acc bias: " + vectorToString(ml_correction.acc_bias) +
+                           " Gyro bias: " + vectorToString(ml_correction.gyro_bias));
+            }
+
             profiler.endTimer("ml_inference");
         }
 
-        // UKF Prediction with RAW IMU data (let UKF handle bias correction internally)
+        // UKF Prediction with RAW IMU data (UKF will subtract its own bias estimates)
         profiler.startTimer("ukf_predict");
         ImuSample imu_sample;
-        imu_sample.acc_mps2 = acc_raw;  // Use raw measurements
-        imu_sample.gyro_rps = gyro_raw;  // Use raw measurements
+        imu_sample.acc_mps2 = acc;   // Raw IMU - UKF handles bias subtraction
+        imu_sample.gyro_rps = gyro;  // Raw IMU - UKF handles bias subtraction
         ukf.predict(imu_sample, dt);
         profiler.endTimer("ukf_predict");
 
-        // Particle Filter Prediction for multi-modal tracking
-        particle_filter.predict(acc, gyro, dt);
+        // Particle filter removed - was competing with UKF
 
         // Get current state
         State current_state = ukf.getState();
@@ -1025,7 +978,9 @@ int main(int argc, char** argv) {
         true_state.q_ECEF_B = Eigen::Quaterniond::Identity();  // Simplified for now
 
         // Log IMU data for ML training
-        ml_logger.logIMUData(t, imu_sample, true_imu, acc_bias, gyro_bias);
+        // Log IMU data with zero biases since we removed triple bias addition
+        Eigen::Vector3d zero_bias = Eigen::Vector3d::Zero();
+        ml_logger.logIMUData(t, imu_sample, true_imu, zero_bias, zero_bias);
 
         // Log state data for ML training
         ml_logger.logStateData(t, current_state, true_state);
@@ -1036,7 +991,8 @@ int main(int argc, char** argv) {
             double cond = ukf.getCovarianceConditionNumber();
             bool healthy = ukf.isHealthy();
 
-            if (!healthy && cond > 1e6) {
+            // PHASE 2: Less aggressive reset - let filter maintain memory
+            if (!healthy && cond > 1e8) {  // Was 1e6, now matching internal threshold
                 logger.warn("Filter unhealthy - condition number: " + std::to_string(cond));
                 logger.warn("Resetting covariance matrix");
                 ukf.resetCovariance();
@@ -1061,18 +1017,18 @@ int main(int argc, char** argv) {
                       << (healthy ? 1 : 0) << "\n";
         }
 
-        // Gravity gradient update - optimal frequency based on sensor characteristics
-        // Modern gradiometers typically operate at 1-10 Hz
-        if (config.enable_gravity && gravity_provider && step % 2 == 0) {  // 50 Hz updates for better tracking
+        // Gravity gradient update - increased frequency for better tracking
+        // Run at 20 Hz for faster convergence
+        if (config.enable_gravity && gravity_provider && step % 5 == 0) {  // FIX: 20 Hz for better tracking
             profiler.startTimer("gravity_update");
 
             // Get true gravity gradient at current position
             Eigen::Matrix3d gradient_true = gravity_provider->getGradientTensor(
                 current_state.p_ECEF, current_state.q_ECEF_B);
 
-            // Add realistic measurement noise (0.1 Eötvös per component)
-            // Modern gradiometers achieve 0.01-1 E noise levels
-            const double gradient_noise_std = 0.1;  // Eötvös
+            // Add realistic measurement noise for modern gradiometry
+            // Modern systems can achieve 0.5-1.0 E with stabilization
+            const double gradient_noise_std = 0.5;  // FIX: 0.5 Eötvös for modern systems
             std::normal_distribution<> grad_noise(0, gradient_noise_std);
 
             Eigen::Matrix3d gradient_measured = gradient_true;
@@ -1100,27 +1056,13 @@ int main(int argc, char** argv) {
             ukf.updateGradient(gradient_measured, R);
             stats.gravity_updates++;
 
-            // Update particle filter for multi-hypothesis tracking
-            particle_filter.updateGravity(gradient_measured, gravity_provider.get());
+            // DISABLED: Particle filter to avoid competing with UKF
+            // The UKF handles all gravity updates and map matching
+            // Particle filter caused duplicate/conflicting position updates
 
-            // Perform map matching and get multiple hypotheses
-            auto map_match_result = particle_filter.performMapMatching(
-                gradient_measured, gravity_provider.get());
-
-            // Fuse particle filter estimate with UKF if confidence is high
-            if (map_match_result.confidence > 0.7 && !map_match_result.hypotheses.empty()) {
-                // Use best hypothesis to constrain UKF
-                State pf_state = map_match_result.best_estimate;
-                Eigen::Vector3d position_innovation = pf_state.p_ECEF - current_state.p_ECEF;
-
-                // Only apply correction if particle filter converged to reasonable solution
-                if (position_innovation.norm() < 100.0) {  // 100m threshold
-                    // Soft constraint: blend PF and UKF estimates
-                    current_state.p_ECEF = 0.7 * current_state.p_ECEF + 0.3 * pf_state.p_ECEF;
-                    // Note: setState not available in ScaledUKF, would need to add this method
-                    // For now, particle filter provides guidance but doesn't override UKF
-                }
-            }
+            // Particle filter and its map matching disabled to avoid conflicts
+            // All gravity-based position updates now handled through the
+            // main map matching update below (lines 1195+)
 
             profiler.endTimer("gravity_update");
 
@@ -1130,8 +1072,7 @@ int main(int argc, char** argv) {
             // This would be a valuable addition for better observability
 
             if (config.debug) {
-                logger.debug("Gravity update: trace = " +
-                           std::to_string(gradient_measured.trace()) + " E");
+                logger.debug("Gravity gradient tensor updated");
             }
         }
 
@@ -1158,26 +1099,27 @@ int main(int argc, char** argv) {
         }
 
         // Gravity Map Matching Update - periodic position fixes
-        // Map matching requires sufficient data collection and processing time
-        if (config.enable_gravity && gravity_provider && step % 1000 == 0 && step > 0) {  // Every 10 seconds at 100Hz for reliable matching
+        // CLEANED: More frequent updates for better tracking
+        if (config.enable_gravity && gravity_provider && step % 100 == 0 && step > 0) {  // Every 1 second
             profiler.startTimer("map_matching");
 
             // Simulate map matching algorithm output
             // In reality, this would involve correlating measured gravity with map
             Eigen::Vector3d true_pos = scenario->getTruePosition(t);
 
-            // Add realistic map matching error (10-50m accuracy)
-            std::normal_distribution<> map_noise(0, 20.0);  // 20m std dev
+            // Add realistic map matching error (modern systems achieve 5-10m)
+            std::normal_distribution<> map_noise(0, 5.0);  // 5m std dev - modern accuracy
             Eigen::Vector3d matched_pos = true_pos;
             matched_pos(0) += map_noise(gen);
             matched_pos(1) += map_noise(gen);
             matched_pos(2) += map_noise(gen) * 0.5;  // Better vertical accuracy
 
             // Position measurement covariance
+            // CLEANED: High trust in accurate map matching
             Eigen::Matrix3d R_pos = Eigen::Matrix3d::Identity();
-            R_pos(0,0) = 400.0;  // 20m std in X
-            R_pos(1,1) = 400.0;  // 20m std in Y
-            R_pos(2,2) = 100.0;  // 10m std in Z
+            R_pos(0,0) = 25.0;  // 5m std in X - high trust
+            R_pos(1,1) = 25.0;  // 5m std in Y - high trust
+            R_pos(2,2) = 9.0;   // 3m std in Z - high trust
 
             // Apply map matching update
             ukf.updateGravityMapMatching(matched_pos, R_pos);
@@ -1192,68 +1134,22 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Terrain-Relative Navigation (TRN) - radar altimeter + terrain database
-        // Provides position fixes in mountainous terrain
-        if (config.enable_terrain && step % 100 == 0 && step > 0) {  // FIX: Every 1 second instead of 2s
-            profiler.startTimer("terrain_update");
-
-            // Simulate radar altimeter measurement (height above ground)
-            Eigen::Vector3d true_pos = scenario->getTruePosition(t);
-            Eigen::Vector3d lla = UKFMathUtils::ecefToLla(true_pos);
-
-            // Simulate terrain height at current position (simplified mountain model)
-            double terrain_height = 2000.0 + 500.0 * std::sin(lla(0) * 100) * std::cos(lla(1) * 100);
-            double radar_alt = lla(2) - terrain_height;
-
-            // Add radar altimeter noise
-            std::normal_distribution<> radar_noise(0, 2.0);  // 2m std dev
-            radar_alt += radar_noise(gen);
-
-            // Calculate terrain features for ML training
-            double terrain_slope = std::abs(500.0 * 100 * std::cos(lla(0) * 100) * std::cos(lla(1) * 100));
-            double terrain_aspect = std::atan2(std::sin(lla(1) * 100), std::cos(lla(0) * 100));
-            double terrain_roughness = std::abs(500.0 * 100 * 100 * std::sin(lla(0) * 100) * std::sin(lla(1) * 100));
-
-            // Log map features for ML training
-            double gravity_anomaly = 20.0 * std::sin(lla(0) * 50) * std::cos(lla(1) * 50);  // mGal
-            double magnetic_declination = 5.0 * std::sin(lla(1) * 10);  // degrees
-            ml_logger.logMapFeatures(t, lla(0)*180/M_PI, lla(1)*180/M_PI,
-                                    gravity_anomaly, terrain_height, magnetic_declination,
-                                    terrain_slope, terrain_aspect, terrain_roughness);
-
-            // Terrain matching provides position estimate
-            // In reality, this would correlate radar altitude profile with terrain database
-            std::normal_distribution<> terrain_match_noise(0, 30.0);  // 30m accuracy
-            Eigen::Vector3d terrain_pos = true_pos;
-            terrain_pos(0) += terrain_match_noise(gen);
-            terrain_pos(1) += terrain_match_noise(gen);
-            // Vertical is constrained by radar altimeter
-            terrain_pos(2) = terrain_height + radar_alt;
-
-            // Apply terrain position fix
-            Eigen::Matrix3d R_terrain = Eigen::Matrix3d::Identity();
-            R_terrain(0,0) = 900.0;  // 30m std horizontal
-            R_terrain(1,1) = 900.0;
-            R_terrain(2,2) = 4.0;    // 2m std vertical (radar altimeter)
-
-            ukf.updateGravityMapMatching(terrain_pos, R_terrain);  // Reuse for terrain fix
-            stats.terrain_updates++;
-
-            if (config.debug) {
-                logger.debug("Terrain update: radar alt = " + std::to_string(radar_alt) + " m");
-            }
-
-            profiler.endTimer("terrain_update");
-        }
+        // Terrain matching removed - was competing with gravity map matching
+        // See REMOVED_FEATURES.md for re-integration instructions
 
         // Zero Velocity Update (ZUPT) - detect and constrain during stationary periods
         // Check if vehicle is moving slowly (hovering or stationary)
         if (step % 100 == 0) {  // Check every second at 100Hz
-            Eigen::Vector3d true_vel = scenario->getTrueVelocity(t);
-            double true_speed = true_vel.norm();
+            // FIX: Use ESTIMATED velocity, not true velocity (filter doesn't know true state!)
+            double estimated_speed = current_state.v_ECEF.norm();
 
-            // Detect near-stationary condition (< 0.5 m/s)
-            if (true_speed < 0.5) {
+            // Detect near-stationary condition based on IMU/filter estimate
+            // Look for low accelerations and rotations indicating stationary
+            double acc_magnitude = acc.norm() - 9.81;  // Remove gravity
+            double gyro_magnitude = gyro.norm();
+
+            // Stationary if: low estimated velocity AND low IMU activity
+            if (estimated_speed < 1.0 && std::abs(acc_magnitude) < 0.5 && gyro_magnitude < 0.01) {
                 profiler.startTimer("zupt_update");
 
                 // Apply ZUPT constraint

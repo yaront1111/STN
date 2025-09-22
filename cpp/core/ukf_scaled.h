@@ -129,6 +129,13 @@ public:
      */
     void updateBiases(const Eigen::Vector3d& acc_bias, const Eigen::Vector3d& gyro_bias);
 
+    /**
+     * @brief Force-resets the filter's position state and covariance
+     * @param new_position The new ECEF position vector
+     * @param position_uncertainty_m Position uncertainty in meters (1-sigma)
+     */
+    void resetPosition(const Eigen::Vector3d& new_position, double position_uncertainty_m);
+
 private:
     // ========== Core State ==========
     State nominal_state_;  // Physical state (unscaled)

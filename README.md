@@ -159,6 +159,36 @@ Run validation tests (if built):
 ./test_gps_denied_tuned   # Test GPS-denied navigation
 ```
 
+## Known Issues and Bug Fixes (2025-09-22)
+
+After comprehensive analysis, the following critical bugs were identified and fixed:
+
+### Critical Bugs Fixed
+1. **Triple Bias Addition** - IMU biases were added 3x (scenario + generation + main loop)
+2. **Competing Filters** - Three parallel filters (UKF, Particle, Adaptive) never synchronized
+3. **Missing Gravity Updates** - Gravity gradients measured but never directly used by UKF
+4. **Duplicate Map Matching** - Two separate paths updating at different frequencies
+5. **Numerical Scaling Issues** - Mixed physical/scaled space causing incorrect Kalman gains
+6. **ZUPT Logic Error** - Used true velocity instead of estimated for stationary detection
+7. **Adaptive Mechanisms Fighting** - Process noise and adaptive scaling conflicted
+8. **ML Blend Weight** - Hard-coded 50% instead of confidence-based
+9. **Measurement Rejection** - Too aggressive, preventing recovery from large errors
+10. **Process Noise Growth** - Unbounded growth causing covariance explosion
+
+### System Improvements
+- Simplified to single UKF architecture
+- Fixed bias modeling to tactical-grade IMU specs
+- Proper numerical scaling throughout
+- Confidence-based ML integration
+- Relaxed measurement gating for recovery
+- Fixed process noise to prevent divergence
+
+### Performance After Fixes (Phase 1)
+- **Improved from 4000m to 1320m** at t=60s (67% reduction!)
+- **Grade C**: Still above 800m threshold for Grade B
+- **Partial Success**: Major bugs fixed but core issues remain
+- **Next Steps**: Need more aggressive architectural changes
+
 ## License
 
 Proprietary - All rights reserved

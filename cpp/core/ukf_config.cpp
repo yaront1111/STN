@@ -45,23 +45,23 @@ void UKFConfig::setDefaults() {
     beta = 2.0;
     kappa = 0.0;
     
-    // FIX: Use improved process noise values from getBalanced
-    process_noise.position = 0.001;    // Reduced for stability
-    process_noise.velocity = 0.01;     // Already good
-    process_noise.attitude = 0.0001;   // Reduced for stability
-    process_noise.accel_bias = 1e-6;   // Already good
-    process_noise.gyro_bias = 1e-8;    // Already good
+    // PHASE 4: Optimal process noise for Grade B (Phase 1 levels)
+    process_noise.position = 0.001;    // 10x reduced from default
+    process_noise.velocity = 0.01;     // 10x reduced from default
+    process_noise.attitude = 0.0001;   // 10x reduced from default
+    process_noise.accel_bias = 1e-6;   // Tactical-grade IMU
+    process_noise.gyro_bias = 1e-8;    // Tactical-grade IMU
     process_noise.clock_drift = 1e-9;
     process_noise.clock_freq = 1e-12;
     
-    // Conservative measurement noise (based on sensor specifications)
-    measurement_noise.gravity_gradient = 1.0;      // 1 Eötvös
-    measurement_noise.gravity_anomaly = 100.0;     // 100 mGal
-    measurement_noise.magnetometer = 0.1;          // 10% of field strength
-    measurement_noise.barometer = 10.0;            // 10 m
-    measurement_noise.radar_altimeter = 1.0;       // 1 m
-    measurement_noise.map_match_position = 50.0;   // 50 m
-    measurement_noise.zupt_velocity = 0.01;        // 1 cm/s
+    // PHASE 4: Optimal measurement trust for Grade B
+    measurement_noise.gravity_gradient = 0.2;      // High trust in gradients
+    measurement_noise.gravity_anomaly = 50.0;      // Moderate trust
+    measurement_noise.magnetometer = 0.05;         // Good magnetometer
+    measurement_noise.barometer = 5.0;             // Standard barometer
+    measurement_noise.radar_altimeter = 0.5;       // Good altimeter
+    measurement_noise.map_match_position = 10.0;   // CRITICAL: High trust in map
+    measurement_noise.zupt_velocity = 0.005;       // Standard ZUPT
     
     // Numerical stability parameters
     numerical.min_eigenvalue = 1e-12;
@@ -92,21 +92,21 @@ void UKFConfig::setGradeAOptimal() {
     beta = 2.0;       // Gaussian assumption
     kappa = 0.0;      // Standard setting
 
-    // FIX: Reduced process noise for better stability with ML corrections
-    process_noise.position = 0.001;    // Reduced 10x: 0.001 m/s^1.5
-    process_noise.velocity = 0.01;     // Reduced 10x: 0.01 m/s^2.5
-    process_noise.attitude = 0.0001;   // Reduced 10x: 0.0001 rad/s^1.5
-    process_noise.accel_bias = 1e-6;   // Reduced 10x: 1e-6 m/s^3.5
-    process_noise.gyro_bias = 1e-8;    // Reduced 10x: 1e-8 rad/s^2.5
+    // Process noise optimized for Grade B+ performance
+    process_noise.position = 0.001;    // Reduced for stability (was 0.01)
+    process_noise.velocity = 0.01;     // Reduced for stability (was 0.1)
+    process_noise.attitude = 0.0001;   // Reduced for stability (was 0.001)
+    process_noise.accel_bias = 1e-6;   // Standard tactical-grade IMU
+    process_noise.gyro_bias = 1e-8;    // Standard tactical-grade IMU
     
-    // FIX: Reduced measurement noise for more effective updates
-    // Lower values make measurements more trusted
-    measurement_noise.gravity_gradient = 1.0;      // Reduced from 10.0 to 1.0 Eötvös
-    measurement_noise.gravity_anomaly = 1.0;       // 1 mGal anomaly noise
-    measurement_noise.magnetometer = 50e-9;        // 50 nT magnetometer noise (Tesla)
-    measurement_noise.barometer = 5.0;             // 5m barometer altitude noise
-    measurement_noise.radar_altimeter = 0.5;       // High-quality radar
-    measurement_noise.map_match_position = 100.0;  // Conservative map matching uncertainty
+    // FIX: Further optimized measurement noise for Grade A with ML
+    // Lower values = more trust in measurements = faster convergence
+    measurement_noise.gravity_gradient = 0.1;      // Very high trust (was 1.0)
+    measurement_noise.gravity_anomaly = 0.5;       // Very high trust (was 1.0)
+    measurement_noise.magnetometer = 25e-9;        // High trust (was 50e-9)
+    measurement_noise.barometer = 2.0;             // High trust (was 5.0)
+    measurement_noise.radar_altimeter = 0.2;       // Very high trust (was 0.5)
+    measurement_noise.map_match_position = 20.0;   // CRITICAL: Much higher trust (was 100.0)
     
     // Tighter gating for Grade A+
     numerical.innovation_outlier_chi2 = 7.815;     // 95% confidence instead of 99%

@@ -88,32 +88,36 @@ public:
         return true;
     }
 
-    // Apply ML correction to IMU data
-    void correctIMU(Eigen::Vector3d& acc, Eigen::Vector3d& gyro) {
+    // Get ML bias estimates (don't correct raw IMU - let UKF handle it)
+    PythonMLBridge::IMUCorrection getBiasEstimates(const Eigen::Vector3d& acc, const Eigen::Vector3d& gyro) {
         if (!bridge_ || !bridge_->isRunning()) {
-            return;  // No correction if ML not available
+            return PythonMLBridge::IMUCorrection();  // Return empty correction
         }
 
         auto correction = bridge_->addSampleAndPredict(acc, gyro);
 
         if (correction.ready && correction.confidence > 0.5) {
-            // Apply bias corrections with confidence weighting
-            double weight = correction.confidence;
-            acc -= correction.acc_bias * weight;
-            gyro -= correction.gyro_bias * weight;
-
-            // FIX: Always update last correction, not just high confidence
+            // Store correction for later use
             last_high_confidence_correction_ = correction;
 
             // Log correction for debugging
             if (correction.confidence > 0.8) {
                 correction_count_++;
                 if (correction_count_ % 100 == 0) {
-                    std::cout << "[ML] Applied " << correction_count_ << " corrections, "
-                              << "last confidence: " << correction.confidence << std::endl;
+                    std::cout << "[ML] Estimated biases (" << correction_count_ << " samples), "
+                              << "confidence: " << correction.confidence << std::endl;
                 }
             }
         }
+
+        return correction;
+    }
+
+    // DEPRECATED: Don't use this - it causes double bias correction!
+    void correctIMU(Eigen::Vector3d& acc, Eigen::Vector3d& gyro) {
+        // DO NOT correct raw IMU here - UKF already subtracts biases
+        // Just get the bias estimates for logging/monitoring
+        getBiasEstimates(acc, gyro);
     }
 
     // Get last high-confidence correction for diagnostics

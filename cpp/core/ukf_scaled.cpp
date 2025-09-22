@@ -264,11 +264,11 @@ void ScaledUKF::addProcessNoiseScaled(double dt) {
     double vel_uncertainty = std::sqrt(P.block<3,3>(3,3).trace() / 3.0);
     double att_uncertainty = std::sqrt(P.block<3,3>(6,6).trace() / 3.0);
 
-    // FIX: Use bounded linear scaling instead of aggressive exponential
-    // Scale between 0.5 and 2.0 based on uncertainty levels
-    double pos_scale = std::min(2.0, std::max(0.5, 1.0 + 0.01 * (10.0 - pos_uncertainty)));
-    double vel_scale = std::min(2.0, std::max(0.5, 1.0 + 0.1 * (1.0 - vel_uncertainty)));
-    double att_scale = std::min(2.0, std::max(0.5, 1.0 + 1.0 * (0.1 - att_uncertainty)));
+    // FIX: Disable adaptive scaling - use fixed process noise
+    // Adaptive scaling caused instability and unbounded growth
+    double pos_scale = 1.0;
+    double vel_scale = 1.0;
+    double att_scale = 1.0;
 
     // Define process noise in PHYSICAL units with adaptive scaling
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> q_std_physical =
@@ -519,28 +519,40 @@ double ScaledUKF::getCovarianceConditionNumber() const {
 
 void ScaledUKF::resetCovariance() {
     if (config_.verbose) {
-        std::cout << "[ScaledUKF] Resetting covariance due to poor health\n";
+        std::cout << "[ScaledUKF] Smart covariance reset - preserving position/velocity knowledge\n";
     }
 
-    // Reset to reasonable uncertainties in scaled space
-    // CRITICAL FIX: Use proper scaled values based on scaler definitions
+    // Smart reset: Preserve position/velocity estimates but increase uncertainty
+    // This prevents throwing away good state knowledge during resets
+
+    // Get current covariance
+    auto P_current = S_ * S_.transpose();
+
+    // Preserve position uncertainty but bound it
+    double pos_scale = std::min(10.0, std::sqrt(P_current.block<3,3>(0,0).trace() / 3.0));
+    if (pos_scale < 2.0) pos_scale = 2.0;  // Minimum 2m uncertainty after reset
+
+    // Preserve velocity uncertainty but bound it
+    double vel_scale = std::min(5.0, std::sqrt(P_current.block<3,3>(3,3).trace() / 3.0));
+    if (vel_scale < 1.0) vel_scale = 1.0;  // Minimum 1m/s uncertainty
+
+    // Reset S_ matrix with smart scaling
     S_ = Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
 
-    // Position: 50m uncertainty (scaled by 10m => 5.0 in scaled space)
-    S_.block<3,3>(0,0) *= 5.0;
+    // Position: Use preserved scale
+    S_.block<3,3>(0,0) *= pos_scale;
 
-    // Velocity: 5 m/s uncertainty (scaled by 1 m/s => 5.0 in scaled space)
-    S_.block<3,3>(3,3) *= 5.0;
+    // Velocity: Use preserved scale
+    S_.block<3,3>(3,3) *= vel_scale;
 
-    // Attitude: 0.1 rad uncertainty (scaled by 0.1 rad => 1.0 in scaled space)
-    S_.block<3,3>(6,6) *= 1.0;
+    // Attitude: Reset to moderate uncertainty
+    S_.block<3,3>(6,6) *= 0.5;  // Reduced from 1.0 for faster convergence
 
-    // Accel bias: 0.001 m/s² uncertainty (scaled by 0.001 m/s² => 1.0 in scaled space)
-    S_.block<3,3>(9,9) *= 1.0;
+    // Accel bias: Reset to moderate uncertainty
+    S_.block<3,3>(9,9) *= 0.5;  // Reduced for faster convergence
 
-    // Gyro bias: 1e-5 rad/s uncertainty (scaled by 1e-5 rad/s => 1.0 in scaled space)
-    // FIX: Was 100.0 which caused huge P_scaled(12,12) = 10000!
-    S_.block<3,3>(12,12) *= 1.0;
+    // Gyro bias: Reset to small uncertainty
+    S_.block<3,3>(12,12) *= 0.5;  // Keep small for stability
 
     // Reset divergence counter
     divergence_count_ = 0;
@@ -592,6 +604,55 @@ void ScaledUKF::updateBiases(const Eigen::Vector3d& acc_bias, const Eigen::Vecto
     Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
     if (llt.info() == Eigen::Success) {
         S_ = llt.matrixL();
+    }
+}
+
+void ScaledUKF::resetPosition(const Eigen::Vector3d& new_position, double position_uncertainty_m) {
+    // Force-reset position state and covariance
+    // This is used to break drift cycles when we have high-confidence position fixes
+
+    std::cout << "[UKF] Aggressive position reset to: " << new_position.transpose()
+              << " with uncertainty: " << position_uncertainty_m << "m" << std::endl;
+
+    // 1. Update nominal position state
+    Eigen::Vector3d position_change = new_position - nominal_state_.p_ECEF;
+    nominal_state_.p_ECEF = new_position;
+
+    // 2. Get current covariance in physical units
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_physical = getCovariance();
+
+    // 3. Reset position uncertainty (indices 0-2)
+    double new_variance = position_uncertainty_m * position_uncertainty_m;
+    P_physical(0,0) = new_variance;
+    P_physical(1,1) = new_variance;
+    P_physical(2,2) = new_variance;
+
+    // 4. Zero out position cross-correlations to prevent instability
+    for (int i = 3; i < ERROR_STATE_DIM; ++i) {
+        P_physical(0,i) = 0.0;
+        P_physical(i,0) = 0.0;
+        P_physical(1,i) = 0.0;
+        P_physical(i,1) = 0.0;
+        P_physical(2,i) = 0.0;
+        P_physical(i,2) = 0.0;
+    }
+
+    // 5. Convert back to scaled space and recompute Cholesky factor
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_scaled =
+        scaler_.scaleCovariance(P_physical);
+
+    // 6. Ensure numerical stability
+    P_scaled = 0.5 * (P_scaled + P_scaled.transpose());
+    P_scaled += 1e-9 * Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>::Identity();
+
+    // 7. Compute new Cholesky factor
+    Eigen::LLT<Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM>> llt(P_scaled);
+    if (llt.info() == Eigen::Success) {
+        S_ = llt.matrixL();
+        std::cout << "[UKF] Position reset successful. New position variance: "
+                  << new_variance << " m²" << std::endl;
+    } else {
+        std::cerr << "[UKF] ERROR: Failed to recompute Cholesky factor after position reset!" << std::endl;
     }
 }
 
@@ -694,8 +755,9 @@ void ScaledUKF::updateGradient(const Eigen::Matrix3d& measured_gradient, const E
     // State update with innovation check
     Eigen::Matrix<double, 9, 1> innovation_flat = y - y_pred;
 
-    // Chi-squared test for outlier rejection (9 DOF, 99% confidence)
-    double chi2_threshold = 21.67;  // chi2inv(0.99, 9)
+    // Chi-squared test for outlier rejection (9 DOF)
+    // FIX: Use more reasonable 95% confidence to accept more measurements
+    double chi2_threshold = 16.92;  // chi2inv(0.95, 9) instead of 99%
     double mahalanobis = innovation_flat.transpose() * Pyy_pinv * innovation_flat;
 
     if (mahalanobis > chi2_threshold) {
@@ -703,7 +765,9 @@ void ScaledUKF::updateGradient(const Eigen::Matrix3d& measured_gradient, const E
             std::cout << "[ScaledUKF] Gravity gradient innovation rejected (chi² = "
                      << mahalanobis << " > " << chi2_threshold << ")\n";
         }
-        return;  // Reject this measurement
+        // FIX: Don't completely reject - apply with reduced weight
+        double weight = chi2_threshold / mahalanobis;
+        K *= weight * 0.5;  // Apply with reduced confidence
     }
 
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> dx_physical = K * innovation_flat;
@@ -893,9 +957,9 @@ void ScaledUKF::updateMapMatch(const Eigen::Vector3d& matched_position_ECEF, dou
     // Compute Kalman gain based on uncertainty
     double map_variance = uncertainty_m * uncertainty_m;
 
-    // Get current position variance from covariance
-    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_current = S_ * S_.transpose();
-    double pos_variance = (P_current(0,0) + P_current(1,1) + P_current(2,2)) / 3.0;
+    // Get current position variance from covariance IN PHYSICAL UNITS
+    Eigen::Matrix<double, ERROR_STATE_DIM, ERROR_STATE_DIM> P_physical = getCovariance();
+    double pos_variance = (P_physical(0,0) + P_physical(1,1) + P_physical(2,2)) / 3.0;
 
     // Optimal Kalman gain
     double K_pos = pos_variance / (pos_variance + map_variance);
@@ -1125,7 +1189,8 @@ void ScaledUKF::updateGravityMapMatching(const Eigen::Vector3d& matched_position
 
     // Check innovation magnitude for outlier rejection
     double innovation_norm = innovation.norm();
-    if (innovation_norm > 1000.0) {  // 1km threshold
+    // FIX: More lenient threshold - we're lost, we NEED these corrections!
+    if (innovation_norm > 2000.0) {  // FIX: 2km threshold (was 1km)
         if (config_.verbose) {
             std::cout << "[ScaledUKF] Map matching rejected: innovation too large ("
                      << innovation_norm << " m)\n";
@@ -1157,10 +1222,11 @@ void ScaledUKF::updateGravityMapMatching(const Eigen::Vector3d& matched_position
     // State correction
     Eigen::Matrix<double, ERROR_STATE_DIM, 1> dx = K * innovation;
 
-    // Apply correction with damping for large corrections
+    // Apply correction with adaptive damping
+    // FIX: Less aggressive damping to allow larger corrections when needed
     double damping_factor = 1.0;
-    if (innovation_norm > 100.0) {  // Apply damping for corrections > 100m
-        damping_factor = 100.0 / innovation_norm;
+    if (innovation_norm > 200.0) {  // FIX: Allow up to 200m corrections (was 100m)
+        damping_factor = std::max(0.5, 200.0 / innovation_norm);  // At least 50% weight
     }
     dx *= damping_factor;
 
