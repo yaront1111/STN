@@ -1,9 +1,0 @@
-{
-  "imu_files": 0,
-  "gravity_files": 0,
-  "state_files": 0,
-  "total_imu_samples": 0,
-  "total_gravity_samples": 0,
-  "total_state_samples": 0,
-  "ready_for_training": false
-}

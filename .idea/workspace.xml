@@ -1,0 +1,434 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="a3d36c05-f365-4477-8ddd-f7e0cf9b5e25" name="Changes" comment="fixed code">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/REMOVED_FEATURES.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/RUNNER_USAGE.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/analyze_grade_a.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/analyze_results.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/gravity_primary.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/core/gravity_navigator.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/adaptive_filter.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/adaptive_filter.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/config_reader.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/config_reader.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/gradiometer_dynamics.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/gravity_gradient_provider.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/gravity_gradient_provider.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/gravity_map_matcher.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/gravity_map_matcher.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/hierarchical_map_matcher.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/hierarchical_map_matcher.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/integrity.hpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/particle_filter.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/particle_filter.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/srtm_provider.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/srtm_provider.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/terrain_correlator.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/terrain_correlator.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/types.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/types.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_config.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_config.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_math_utils.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_math_utils.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_measurements.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_measurements.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_scaled.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_scaled.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_sigma_points.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_sigma_points.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_state_scaler_v2.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_state_scaler_v2.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/hardware/hardware_interface.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/hardware/sensor_interfaces.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/ml/json_parser.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/ml/onnx_inference.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/ml/python_bridge.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/ml/python_bridge.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/download_real_egm2008.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/download_real_srtm.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/egm2008/egm2008_n360.dat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/egm2008/egm2008_n360.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/egm2008/egm2008_n360_fixed.dat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/egm2008/gravity_anomaly_1deg.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/flight/imu.csv" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/flight/performance_metrics.csv" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/flight/radalt.csv" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/flight/truth.csv" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/srtm/elevation_database.dat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/srtm/elevation_database.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/srtm/geoid_synthetic.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/egm2008/egm2008_n360.dat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/egm2008/egm2008_n360.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/egm2008/gravity_anomaly_1deg.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logs/.gitkeep" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logs/debug/.gitkeep" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logs/navigation/.gitkeep" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logs/profiling/.gitkeep" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logs/recordings/.gitkeep" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/logs/sensors/.gitkeep" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/convert_to_onnx.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/data" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/error_correction/lstm_imu_corrector.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/gravity_enhancement/unet_model.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/logs/covariance_health.csv" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/logs/measurement_updates.csv" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/logs/performance_metrics.csv" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/logs/state_evolution.csv" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/ml_inference_server.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/ml_unified_server.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/models/barometer_corrector.h5" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/models/gravity_enhancer.h5" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/models/lstm_imu_corrector.h5" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/models/lstm_imu_corrector_new.h5" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/models/magnetometer_calibrator.h5" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/models/training_metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/requirements.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/simple_train.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/train_all_models.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/train_lstm_imu.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/train_models.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/train_unet_gravity.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml/training_metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/run_navigation_system.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_ml_system.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_gravity_map_match.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/training_metadata.json" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;yaront1111&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;git@github.com:yaront1111/STN.git&quot;,
+    &quot;accountId&quot;: &quot;b8e187bd-22b9-46c3-94c8-dffda4ff6960&quot;
+  }
+}</component>
+  <component name="KubernetesApiPersistence">{}</component>
+  <component name="KubernetesApiProvider">{
+  &quot;isMigrated&quot;: true
+}</component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 4
+}</component>
+  <component name="ProjectId" id="31O22348JBY1pDCjWyK94pdGTrp" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python.simple_ui.executor&quot;: &quot;Run&quot;,
+    &quot;Python.stn_control_center.executor&quot;: &quot;Run&quot;,
+    &quot;Python.stn_web_ui.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;Shell Script.run_ui.sh.executor&quot;: &quot;Run&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/yarontorgeman/stn-v0.1&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  }
+}</component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$" />
+    </key>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-6a121458b545-JavaScript-PY-251.25410.159" />
+        <option value="bundled-python-sdk-e0ed3721d81e-36ea0e71a18c-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-251.25410.159" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="a3d36c05-f365-4477-8ddd-f7e0cf9b5e25" name="Changes" comment="" />
+      <created>1755380587696</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1755380587696</updated>
+      <workItem from="1755380588768" duration="64669000" />
+      <workItem from="1757009823873" duration="65185000" />
+      <workItem from="1758358014674" duration="199000" />
+      <workItem from="1758358525336" duration="47004000" />
+    </task>
+    <task id="LOCAL-00001" summary="test">
+      <option name="closed" value="true" />
+      <created>1755381024268</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1755381024268</updated>
+    </task>
+    <task id="LOCAL-00002" summary="test">
+      <option name="closed" value="true" />
+      <created>1755807288221</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1755807288221</updated>
+    </task>
+    <task id="LOCAL-00003" summary="test">
+      <option name="closed" value="true" />
+      <created>1756388706870</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1756388706870</updated>
+    </task>
+    <task id="LOCAL-00004" summary="test">
+      <option name="closed" value="true" />
+      <created>1756392177693</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1756392177693</updated>
+    </task>
+    <task id="LOCAL-00005" summary="test">
+      <option name="closed" value="true" />
+      <created>1756406173654</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1756406173654</updated>
+    </task>
+    <task id="LOCAL-00006" summary="test">
+      <option name="closed" value="true" />
+      <created>1756406240571</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1756406240571</updated>
+    </task>
+    <task id="LOCAL-00007" summary="test">
+      <option name="closed" value="true" />
+      <created>1756483863442</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1756483863442</updated>
+    </task>
+    <task id="LOCAL-00008" summary="test">
+      <option name="closed" value="true" />
+      <created>1758057027394</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1758057027394</updated>
+    </task>
+    <task id="LOCAL-00009" summary="test">
+      <option name="closed" value="true" />
+      <created>1758119754402</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1758119754402</updated>
+    </task>
+    <task id="LOCAL-00010" summary="test">
+      <option name="closed" value="true" />
+      <created>1758121194202</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1758121194202</updated>
+    </task>
+    <task id="LOCAL-00011" summary="test">
+      <option name="closed" value="true" />
+      <created>1758125752365</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1758125752365</updated>
+    </task>
+    <task id="LOCAL-00012" summary="test">
+      <option name="closed" value="true" />
+      <created>1758125761859</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1758125761859</updated>
+    </task>
+    <task id="LOCAL-00013" summary="test">
+      <option name="closed" value="true" />
+      <created>1758137064765</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1758137064765</updated>
+    </task>
+    <task id="LOCAL-00014" summary="test">
+      <option name="closed" value="true" />
+      <created>1758138859484</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1758138859484</updated>
+    </task>
+    <task id="LOCAL-00015" summary="test">
+      <option name="closed" value="true" />
+      <created>1758141100198</created>
+      <option name="number" value="00015" />
+      <option name="presentableId" value="LOCAL-00015" />
+      <option name="project" value="LOCAL" />
+      <updated>1758141100198</updated>
+    </task>
+    <task id="LOCAL-00016" summary="test">
+      <option name="closed" value="true" />
+      <created>1758141531351</created>
+      <option name="number" value="00016" />
+      <option name="presentableId" value="LOCAL-00016" />
+      <option name="project" value="LOCAL" />
+      <updated>1758141531351</updated>
+    </task>
+    <task id="LOCAL-00017" summary="test">
+      <option name="closed" value="true" />
+      <created>1758144840363</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1758144840363</updated>
+    </task>
+    <task id="LOCAL-00018" summary="&#10;grade b+">
+      <option name="closed" value="true" />
+      <created>1758283854845</created>
+      <option name="number" value="00018" />
+      <option name="presentableId" value="LOCAL-00018" />
+      <option name="project" value="LOCAL" />
+      <updated>1758283854845</updated>
+    </task>
+    <task id="LOCAL-00019" summary="&#10;grade b+">
+      <option name="closed" value="true" />
+      <created>1758289596724</created>
+      <option name="number" value="00019" />
+      <option name="presentableId" value="LOCAL-00019" />
+      <option name="project" value="LOCAL" />
+      <updated>1758289596724</updated>
+    </task>
+    <task id="LOCAL-00020" summary="&#10;grade b+">
+      <option name="closed" value="true" />
+      <created>1758291509405</created>
+      <option name="number" value="00020" />
+      <option name="presentableId" value="LOCAL-00020" />
+      <option name="project" value="LOCAL" />
+      <updated>1758291509405</updated>
+    </task>
+    <task id="LOCAL-00021" summary="&#10;grade b+">
+      <option name="closed" value="true" />
+      <created>1758310656988</created>
+      <option name="number" value="00021" />
+      <option name="presentableId" value="LOCAL-00021" />
+      <option name="project" value="LOCAL" />
+      <updated>1758310656988</updated>
+    </task>
+    <task id="LOCAL-00022" summary="&#10;grade b+">
+      <option name="closed" value="true" />
+      <created>1758311100622</created>
+      <option name="number" value="00022" />
+      <option name="presentableId" value="LOCAL-00022" />
+      <option name="project" value="LOCAL" />
+      <updated>1758311100622</updated>
+    </task>
+    <task id="LOCAL-00023" summary="&#10;grade b+">
+      <option name="closed" value="true" />
+      <created>1758312226822</created>
+      <option name="number" value="00023" />
+      <option name="presentableId" value="LOCAL-00023" />
+      <option name="project" value="LOCAL" />
+      <updated>1758312226822</updated>
+    </task>
+    <task id="LOCAL-00024" summary="&#10;grade b+">
+      <option name="closed" value="true" />
+      <created>1758313322522</created>
+      <option name="number" value="00024" />
+      <option name="presentableId" value="LOCAL-00024" />
+      <option name="project" value="LOCAL" />
+      <updated>1758313322522</updated>
+    </task>
+    <task id="LOCAL-00025" summary="&#10;grade b+">
+      <option name="closed" value="true" />
+      <created>1758313863863</created>
+      <option name="number" value="00025" />
+      <option name="presentableId" value="LOCAL-00025" />
+      <option name="project" value="LOCAL" />
+      <updated>1758313863863</updated>
+    </task>
+    <task id="LOCAL-00026" summary="&#10;grade b+">
+      <option name="closed" value="true" />
+      <created>1758315572458</created>
+      <option name="number" value="00026" />
+      <option name="presentableId" value="LOCAL-00026" />
+      <option name="project" value="LOCAL" />
+      <updated>1758315572458</updated>
+    </task>
+    <task id="LOCAL-00027" summary="&#10;grade b+">
+      <option name="closed" value="true" />
+      <created>1758317779998</created>
+      <option name="number" value="00027" />
+      <option name="presentableId" value="LOCAL-00027" />
+      <option name="project" value="LOCAL" />
+      <updated>1758317779998</updated>
+    </task>
+    <task id="LOCAL-00028" summary="&#10;grade b+">
+      <option name="closed" value="true" />
+      <created>1758319775781</created>
+      <option name="number" value="00028" />
+      <option name="presentableId" value="LOCAL-00028" />
+      <option name="project" value="LOCAL" />
+      <updated>1758319775781</updated>
+    </task>
+    <task id="LOCAL-00029" summary="fixed code">
+      <option name="closed" value="true" />
+      <created>1758575808312</created>
+      <option name="number" value="00029" />
+      <option name="presentableId" value="LOCAL-00029" />
+      <option name="project" value="LOCAL" />
+      <updated>1758575808312</updated>
+    </task>
+    <option name="localTasksCounter" value="30" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="test" />
+    <MESSAGE value="&#10;grade b+" />
+    <MESSAGE value="fixed code" />
+    <option name="LAST_COMMIT_MESSAGE" value="fixed code" />
+  </component>
+  <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/stn_v0_1$stn_web_ui.coverage" NAME="stn_web_ui Coverage Results" MODIFIED="1755805834289" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/stn_v0_1$stn_control_center.coverage" NAME="stn_control_center Coverage Results" MODIFIED="1755805767451" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/stn_v0_1$simple_ui.coverage" NAME="simple_ui Coverage Results" MODIFIED="1755806124280" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+  </component>
+</project>
