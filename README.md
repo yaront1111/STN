@@ -123,7 +123,7 @@ clang++ build/*.o -L/opt/homebrew/lib -lyaml-cpp -std=c++17 -o navigation_system
 ### ⚠️ Required Data
 The system needs the following data files to run:
 - Sensor measurements: `data/flight/*.csv`
-- Gravity model: `data/egm2008/*.dat`
+- Gravity model: `data/xgm2019e/*.dat`
 - Terrain data: `data/srtm/*.hgt`
 - ML models: `ml/models/*.onnx`
 
@@ -159,7 +159,7 @@ rbpf:
 
 maps:
   gravity:
-    data_path: "data/egm2008"
+    data_path: "data/xgm2019e"
   terrain:
     data_path: "data/srtm"
 ```

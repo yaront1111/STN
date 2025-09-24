@@ -5,105 +5,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="a3d36c05-f365-4477-8ddd-f7e0cf9b5e25" name="Changes" comment="fixed code">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/REMOVED_FEATURES.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/RUNNER_USAGE.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/analyze_grade_a.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/analyze_results.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/config/gravity_primary.yaml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/core/gravity_navigator.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/adaptive_filter.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/adaptive_filter.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/config_reader.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/config_reader.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/gradiometer_dynamics.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/gravity_gradient_provider.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/gravity_gradient_provider.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/gravity_map_matcher.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/gravity_map_matcher.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/hierarchical_map_matcher.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/hierarchical_map_matcher.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/integrity.hpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/particle_filter.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/particle_filter.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/srtm_provider.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/srtm_provider.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/terrain_correlator.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/terrain_correlator.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/types.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/types.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_config.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_config.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_math_utils.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_math_utils.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_measurements.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_measurements.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_scaled.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_scaled.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_sigma_points.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_sigma_points.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_state_scaler_v2.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/core/ukf_state_scaler_v2.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/hardware/hardware_interface.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/hardware/sensor_interfaces.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/ml/json_parser.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/ml/onnx_inference.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/ml/python_bridge.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/ml/python_bridge.h" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/download_real_egm2008.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/download_real_srtm.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/egm2008/egm2008_n360.dat" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/egm2008/egm2008_n360.npz" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/egm2008/egm2008_n360_fixed.dat" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/egm2008/gravity_anomaly_1deg.npz" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/flight/imu.csv" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/flight/performance_metrics.csv" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/flight/radalt.csv" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/flight/truth.csv" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/srtm/elevation_database.dat" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/srtm/elevation_database.npz" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/srtm/geoid_synthetic.npz" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/egm2008/egm2008_n360.dat" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/egm2008/egm2008_n360.npz" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/egm2008/gravity_anomaly_1deg.npz" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/logs/.gitkeep" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/logs/debug/.gitkeep" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/logs/navigation/.gitkeep" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/logs/profiling/.gitkeep" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/logs/recordings/.gitkeep" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/logs/sensors/.gitkeep" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/convert_to_onnx.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/data" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/error_correction/lstm_imu_corrector.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/gravity_enhancement/unet_model.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/logs/covariance_health.csv" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/logs/measurement_updates.csv" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/logs/performance_metrics.csv" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/logs/state_evolution.csv" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/ml_inference_server.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/ml_unified_server.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/models/barometer_corrector.h5" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/models/gravity_enhancer.h5" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/models/lstm_imu_corrector.h5" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/models/lstm_imu_corrector_new.h5" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/models/magnetometer_calibrator.h5" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/models/training_metadata.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/requirements.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/simple_train.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/train_all_models.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/train_lstm_imu.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/train_models.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/train_unet_gravity.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ml/training_metadata.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/run_navigation_system.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_ml_system.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_gravity_map_match.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/training_metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/simple_test.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/simple_test.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -180,7 +85,7 @@
       <workItem from="1755380588768" duration="64669000" />
       <workItem from="1757009823873" duration="65185000" />
       <workItem from="1758358014674" duration="199000" />
-      <workItem from="1758358525336" duration="47004000" />
+      <workItem from="1758358525336" duration="61698000" />
     </task>
     <task id="LOCAL-00001" summary="test">
       <option name="closed" value="true" />

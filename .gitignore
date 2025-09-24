@@ -17,9 +17,9 @@ navigation_test
 .DS_Store
 
 # Data files (too large for git)
-data/egm2008/*.dat
-data/egm2008/*.gz
-data/egm2008/*.npz
+data/xgm2019e/*.dat
+data/xgm2019e/*.gz
+data/xgm2019e/*.npz
 data/srtm/*.hgt
 data/srtm/*.zip
 data/srtm/*.dat

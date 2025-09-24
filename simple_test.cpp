@@ -84,7 +84,7 @@ int main() {
     std::cout << "\nTest 5: XGM2019e gravity map..." << std::endl;
     try {
         XGM2019eConfig gravity_config;
-        auto gravity_map = std::make_unique<XGM2019eMap>("data/egm2008", gravity_config);
+        auto gravity_map = std::make_unique<XGM2019eMap>("data/xgm2019e", gravity_config);
         std::cout << "  ✓ Gravity map created" << std::endl;
 
         if (gravity_map->initialize()) {
