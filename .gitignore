@@ -1,0 +1,76 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+navigation_system
+navigation_test
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Data files (too large for git)
+data/egm2008/*.dat
+data/egm2008/*.gz
+data/egm2008/*.npz
+data/srtm/*.hgt
+data/srtm/*.zip
+data/srtm/*.dat
+data/flight/*.csv
+data/flight/*.npz
+
+# ML models
+ml/models/*.h5
+ml/models/*.onnx
+ml/models/*.pb
+
+# Log files
+logs/**/*.csv
+logs/**/*.txt
+logs/**/*.log
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+.venv
+
+# CMake (if used later)
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Documentation build
+docs/_build/
+docs/html/
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+.cache/
+
+# Test outputs
+test_results/
+coverage/
+*.gcov
+*.gcda
+*.gcno
+
+# Keep directory structure
+!logs/.gitkeep
+!data/.gitkeep
+!ml/models/.gitkeep
+!build/.gitkeep
