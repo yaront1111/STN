@@ -46,7 +46,7 @@ TrajectoryAnalyzer::TrajectoryAnalyzer(bool enable_file_logging)
 
     // Initialize analysis windows
     for (double window : analysis_windows_) {
-        windowed_stats_[window] = WindowedStatistics{window};
+        windowed_stats_[window] = WindowedStatistics{window, {}, {}, {}, {}, {}, {}};
     }
 }
 
@@ -426,7 +426,7 @@ WindowedStatistics TrajectoryAnalyzer::getWindowedStats(double window) const {
     if (it != windowed_stats_.end()) {
         return it->second;
     }
-    return WindowedStatistics{window};
+    return WindowedStatistics{window, {}, {}, {}, {}, {}, {}};
 }
 
 Vector3d TrajectoryAnalyzer::computePositionError(double timestamp) const {

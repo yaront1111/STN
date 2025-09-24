@@ -487,7 +487,7 @@ std::vector<int> Statistics::systematicResampling(const std::vector<double>& wei
     int j = 0;
     for (int i = 0; i < N; ++i) {
         double threshold = u + i * step;
-        while (j < cumsum.size() && cumsum[j] < threshold) {
+        while (static_cast<size_t>(j) < cumsum.size() && cumsum[j] < threshold) {
             j++;
         }
         indices[i] = std::min(j, (int)weights.size() - 1);

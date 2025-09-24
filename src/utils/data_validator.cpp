@@ -94,7 +94,7 @@ void StatisticalAccumulator::computeRobustStatistics() {
     median_ = VectorXd::Zero(dim);
     
     // Compute median for each dimension
-    for (int d = 0; d < dim; ++d) {
+    for (int d = 0; d < static_cast<int>(dim); ++d) {
         std::vector<double> values;
         for (const auto& s : samples_) {
             values.push_back(s(d));

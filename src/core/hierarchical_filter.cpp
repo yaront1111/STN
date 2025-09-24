@@ -6,19 +6,75 @@
 #include "hierarchical_filter.h"
 #include "../utils/math_utils.h"
 #include "../maps/composite_map_manager.h"
+
 #include <algorithm>
 #include <numeric>
 #include <sstream>
+#include <chrono>
+#include <limits>
 
 namespace Navigation {
+
+// ------------ local helpers (anonymous namespace) -----------------
+namespace {
+    inline Eigen::Matrix3d sanitizeCov(const Eigen::Matrix3d& Pin) {
+        // Symmetrize, clamp eigenvalues to keep SPD and reasonable condition number
+        Eigen::Matrix3d P = 0.5 * (Pin + Pin.transpose());
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(P);
+        if (es.info() != Eigen::Success) {
+            return Eigen::Matrix3d::Identity() * 1e2; // fall back to safe covariance
+        }
+        Eigen::Vector3d d = es.eigenvalues();
+        d = d.cwiseMax(1e-9).cwiseMin(1e9);
+        return es.eigenvectors() * d.asDiagonal() * es.eigenvectors().transpose();
+    }
+
+    // Unused helper function (commented out to fix warning)
+    /*
+    inline Eigen::Matrix3d inverseSPD(const Eigen::Matrix3d& P) {
+        // Solve for inverse without explicit inverse of non-SPD
+        Eigen::Matrix3d Psym = 0.5 * (P + P.transpose());
+        Eigen::LDLT<Eigen::Matrix3d> ldlt(Psym);
+        if (ldlt.info() != Eigen::Success) {
+            return (sanitizeCov(P)).inverse();
+        }
+        Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
+        return ldlt.solve(I);
+    }
+    */
+
+    inline Eigen::Matrix3d solveSPD(const Eigen::Matrix3d& A, const Eigen::Matrix3d& B) {
+        // Solve A * X = B for X, assuming A SPD
+        Eigen::LDLT<Eigen::Matrix3d> ldlt(0.5 * (A + A.transpose()));
+        if (ldlt.info() != Eigen::Success) {
+            return A.inverse() * B;
+        }
+        return ldlt.solve(B);
+    }
+
+    inline double clamp(double v, double lo, double hi) {
+        return std::max(lo, std::min(hi, v));
+    }
+}
+// -------------------------------------------------------------------
 
 /**
  * Hierarchical Filter - YAML Constructor
  */
 HierarchicalFilter::HierarchicalFilter(const YAML::Node& ukf_node,
-                                     const YAML::Node& rbpf_node,
-                                     MapManager* maps)
-    : maps_(maps), perf_monitor_(nullptr) {
+                                       const YAML::Node& rbpf_node,
+                                       MapManager* maps)
+    : maps_(maps),
+      perf_monitor_(nullptr),
+      current_mode_(FilterMode::UKF_ONLY),
+      max_history_size_(200),
+      last_reset_time_(0.0),
+      last_map_fix_time_(0.0),
+      consecutive_outlier_count_(0),
+      ukf_compute_time_(0.0),
+      rbpf_compute_time_(0.0),
+      fusion_compute_time_(0.0),
+      rbpf_timer_(0.0) {
 
     // Parse YAML configs
     HierarchicalConfig config;
@@ -34,7 +90,6 @@ HierarchicalFilter::HierarchicalFilter(const YAML::Node& ukf_node,
     }
 
     config_ = config;
-    current_mode_ = FilterMode::UKF_ONLY;
     adaptive_ukf_rate_ = config.ukf_rate;
     adaptive_rbpf_rate_ = config.rbpf_rate;
 
@@ -42,7 +97,6 @@ HierarchicalFilter::HierarchicalFilter(const YAML::Node& ukf_node,
 
     // Initialize SR-UKF
     SRUKFConfig ukf_config;
-    // Note: SRUKFConfig doesn't have use_schmidt_trigger field
     ukf_ = std::make_unique<SquareRootUKF>(ukf_config);
 
     // Initialize RBPF
@@ -50,14 +104,10 @@ HierarchicalFilter::HierarchicalFilter(const YAML::Node& ukf_node,
     rbpf_config.num_particles = 100;
     rbpf_ = std::make_unique<RBPF>(rbpf_config);
 
-    // Set maps for RBPF if available
+    // Set maps for RBPF if available (TODO: refactor ownership to shared_ptr)
     if (maps_) {
-        auto composite_map = dynamic_cast<CompositeMapManager*>(maps_);
-        if (composite_map) {
-            // Note: RBPF expects shared_ptr, but we have raw pointers from composite map
-            // For now, we'll skip setting these to avoid ownership issues
-            // TODO: Refactor to use shared_ptr throughout
-        }
+        auto* composite_map = dynamic_cast<CompositeMapManager*>(maps_);
+        (void)composite_map;
     }
 
     LOG_INFO("Hierarchical filter initialized from YAML");
@@ -67,10 +117,20 @@ HierarchicalFilter::HierarchicalFilter(const YAML::Node& ukf_node,
  * Hierarchical Filter - Standard Constructor
  */
 HierarchicalFilter::HierarchicalFilter(const HierarchicalConfig& config,
-                                     MapManager* maps,
-                                     PerformanceMonitor* perf)
-    : maps_(maps), perf_monitor_(perf), config_(config),
+                                       MapManager* maps,
+                                       PerformanceMonitor* perf)
+    : maps_(maps),
+      perf_monitor_(perf),
+      config_(config),
       current_mode_(FilterMode::UKF_ONLY),
+      max_history_size_(200),
+      last_reset_time_(0.0),
+      last_map_fix_time_(0.0),
+      consecutive_outlier_count_(0),
+      ukf_compute_time_(0.0),
+      rbpf_compute_time_(0.0),
+      fusion_compute_time_(0.0),
+      rbpf_timer_(0.0),
       adaptive_ukf_rate_(config.ukf_rate),
       adaptive_rbpf_rate_(config.rbpf_rate) {
 
@@ -78,7 +138,6 @@ HierarchicalFilter::HierarchicalFilter(const HierarchicalConfig& config,
 
     // Initialize SR-UKF
     SRUKFConfig ukf_config;
-    // Note: SRUKFConfig doesn't have use_schmidt_trigger field
     ukf_ = std::make_unique<SquareRootUKF>(ukf_config);
 
     // Initialize RBPF
@@ -86,14 +145,10 @@ HierarchicalFilter::HierarchicalFilter(const HierarchicalConfig& config,
     rbpf_config.num_particles = 100;  // Adjust based on performance
     rbpf_ = std::make_unique<RBPF>(rbpf_config);
 
-    // Set maps for RBPF if available
+    // Set maps for RBPF if available (TODO: refactor ownership to shared_ptr)
     if (maps_) {
-        auto composite_map = dynamic_cast<CompositeMapManager*>(maps_);
-        if (composite_map) {
-            // Note: RBPF expects shared_ptr, but we have raw pointers from composite map
-            // For now, we'll skip setting these to avoid ownership issues
-            // TODO: Refactor to use shared_ptr throughout
-        }
+        auto* composite_map = dynamic_cast<CompositeMapManager*>(maps_);
+        (void)composite_map;
     }
 
     {
@@ -107,18 +162,18 @@ HierarchicalFilter::HierarchicalFilter(const HierarchicalConfig& config,
 bool HierarchicalFilter::initialize(const StateVector& initial_state) {
     // Create default covariance
     Eigen::Matrix<double, 21, 21> initial_cov = Eigen::Matrix<double, 21, 21>::Identity();
-    initial_cov.block<3,3>(0,0) *= 100.0;    // Position: 10m std
-    initial_cov.block<3,3>(3,3) *= 1.0;      // Velocity: 1m/s std
-    initial_cov.block<3,3>(6,6) *= 0.01;     // Attitude: 0.1rad std
-    initial_cov.block<3,3>(9,9) *= 0.01;     // Accel bias: 0.1m/s² std
-    initial_cov.block<3,3>(12,12) *= 0.001;  // Gyro bias: 0.03rad/s std
-    initial_cov.block<5,5>(15,15) *= 1.0;    // Gravity bias: 1mGal std
+    initial_cov.block<3,3>(0,0)   *= 100.0;   // Position: 10m std
+    initial_cov.block<3,3>(3,3)   *= 1.0;     // Velocity: 1m/s std
+    initial_cov.block<3,3>(6,6)   *= 0.01;    // Attitude: 0.1rad std
+    initial_cov.block<3,3>(9,9)   *= 0.01;    // Accel bias: 0.1m/s² std
+    initial_cov.block<3,3>(12,12) *= 0.001;   // Gyro bias: 0.03rad/s std
+    initial_cov.block<5,5>(15,15) *= 1.0;     // Gravity bias: 1mGal std
 
     return initialize(initial_state, initial_cov);
 }
 
 bool HierarchicalFilter::initialize(const StateVector& initial_state,
-                                   const Eigen::Matrix<double, 21, 21>& initial_cov) {
+                                    const Eigen::Matrix<double, 21, 21>& initial_cov) {
     LOG_INFO("Initializing filter with initial state");
 
     // Initialize UKF
@@ -128,23 +183,23 @@ bool HierarchicalFilter::initialize(const StateVector& initial_state,
     rbpf_->initialize(initial_state, initial_cov);
 
     // Set initial combined state
-    current_state_.ukf_state = initial_state;
-    current_state_.ukf_covariance = initial_cov;
+    current_state_.ukf_state        = initial_state;
+    current_state_.ukf_covariance   = initial_cov;
     current_state_.position_correction = Vector3d::Zero();
     current_state_.position_covariance = Matrix3d::Identity() * 10.0;
 
-    current_state_.position = initial_state.position;
-    current_state_.velocity = initial_state.velocity;
-    current_state_.attitude = initial_state.quaternion;
+    current_state_.position  = initial_state.position;
+    current_state_.velocity  = initial_state.velocity;
+    current_state_.attitude  = initial_state.quaternion;
     current_state_.covariance.setIdentity();
     current_state_.covariance.block<3,3>(0,0) = initial_cov.block<3,3>(0,0);
     current_state_.covariance.block<3,3>(3,3) = initial_cov.block<3,3>(3,3);
     current_state_.covariance.block<3,3>(6,6) = initial_cov.block<3,3>(6,6);
 
-    current_state_.timestamp = 0;
-    current_state_.mode = FilterMode::UKF_ONLY;
+    current_state_.timestamp  = 0.0;
+    current_state_.mode       = FilterMode::UKF_ONLY;
     current_state_.confidence = 1.0;
-    current_state_.is_valid = true;
+    current_state_.is_valid   = true;
 
     LOG_INFO("Filter initialization complete");
     return true;
@@ -158,22 +213,25 @@ CombinedState HierarchicalFilter::processIMU(const IMUData& imu, double dt) {
 
     // Get updated UKF state
     auto ukf_state = ukf_->getState();
-    auto ukf_cov = ukf_->getCovariance();
+    auto ukf_cov   = ukf_->getCovariance();
 
     // Update combined state with UKF prediction
-    current_state_.ukf_state = ukf_state;
+    current_state_.ukf_state      = ukf_state;
     current_state_.ukf_covariance = ukf_cov;
 
     // Apply RBPF correction if available
     if (current_mode_ == FilterMode::UKF_RBPF) {
         current_state_ = fuseEstimates(ukf_state, ukf_cov,
-                                      current_state_.position_correction,
-                                      current_state_.position_covariance);
+                                       current_state_.position_correction,
+                                       current_state_.position_covariance);
     } else {
         // Direct UKF state
         current_state_.position = ukf_state.position;
         current_state_.velocity = ukf_state.velocity;
         current_state_.attitude = ukf_state.quaternion;
+        current_state_.covariance.block<3,3>(0,0) = ukf_cov.block<3,3>(0,0);
+        current_state_.covariance.block<3,3>(3,3) = ukf_cov.block<3,3>(3,3);
+        current_state_.covariance.block<3,3>(6,6) = ukf_cov.block<3,3>(6,6);
     }
 
     current_state_.timestamp = imu.timestamp;
@@ -229,21 +287,21 @@ CombinedState HierarchicalFilter::processMeasurement(const SensorData& data) {
             // Convert 6-element tensor to 5-element STF for RBPF
             Eigen::Matrix<double, 5, 1> tensor5;
             tensor5 << data.gradiometer.tensor(0),   // Txx
-                      data.gradiometer.tensor(3),   // Tyy
-                      data.gradiometer.tensor(4),   // Tzz
-                      data.gradiometer.tensor(1),   // Txy
-                      data.gradiometer.tensor(2);   // Txz
+                       data.gradiometer.tensor(3),   // Tyy
+                       data.gradiometer.tensor(4),   // Tzz
+                       data.gradiometer.tensor(1),   // Txy
+                       data.gradiometer.tensor(2);   // Txz
             rbpf_->updateGravity(tensor5);
         }
     }
 
     // Update combined state after measurement
     auto ukf_state = ukf_->getState();
-    auto ukf_cov = ukf_->getCovariance();
+    auto ukf_cov   = ukf_->getCovariance();
 
     current_state_ = fuseEstimates(ukf_state, ukf_cov,
-                                  current_state_.position_correction,
-                                  current_state_.position_covariance);
+                                   current_state_.position_correction,
+                                   current_state_.position_covariance);
 
     return current_state_;
 }
@@ -254,18 +312,17 @@ CombinedState HierarchicalFilter::orchestrateFilters(const SensorData& sensor_da
     // 1. Process sensor data through appropriate filter
     runUKF(sensor_data, dt);
 
-    // 2. Check if RBPF should run (based on rate and mode)
-    static double rbpf_timer = 0;
-    rbpf_timer += dt;
-
-    if (rbpf_timer >= 1.0 / adaptive_rbpf_rate_ && current_mode_ != FilterMode::UKF_ONLY) {
-        runRBPF(current_state_, rbpf_timer);
-        rbpf_timer = 0;
+    // 2. RBPF scheduling
+    rbpf_timer_ += dt;
+    if (rbpf_timer_ >= std::max(1e-3, 1.0 / adaptive_rbpf_rate_) &&
+        current_mode_ != FilterMode::UKF_ONLY) {
+        runRBPF(current_state_, rbpf_timer_);
+        rbpf_timer_ = 0.0;
     }
 
     // 3. Check mode transitions
     if (shouldTransitionMode()) {
-        FilterMode new_mode = FilterMode::UKF_RBPF;  // Determine appropriate mode
+        FilterMode new_mode = FilterMode::UKF_RBPF;  // default path
 
         if (checkResetConditions()) {
             new_mode = FilterMode::RBPF_RESET;
@@ -283,12 +340,12 @@ CombinedState HierarchicalFilter::orchestrateFilters(const SensorData& sensor_da
 
     // 5. Fuse estimates from multiple filters
     auto ukf_state = ukf_->getState();
-    auto ukf_cov = ukf_->getCovariance();
+    auto ukf_cov   = ukf_->getCovariance();
     auto rbpf_correction = getRBPFCorrection();
 
     current_state_ = fuseEstimates(ukf_state, ukf_cov,
-                                  rbpf_correction,
-                                  current_state_.position_covariance);
+                                   rbpf_correction,
+                                   current_state_.position_covariance);
 
     // 6. Update state history
     state_history_.push(current_state_);
@@ -330,27 +387,28 @@ void HierarchicalFilter::updateUKFMeasurement(const SensorData& data) {
 void HierarchicalFilter::runRBPF(const CombinedState& ukf_state, double dt) {
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Propagate particles using UKF as proposal
-    // RBPF prediction using IMU data (use zero biases for now)
+    // Propagate particles using UKF as proposal (use zero biases for now)
     rbpf_->predict(Vector3d::Zero(), Vector3d::Zero(), dt);
 
     // Update weights based on map matching
     if (maps_) {
-        // Get current altitude for terrain matching
-        double altitude = -ukf_state.position.z();  // Convert to altitude
-
-        // Update RBPF with terrain correlation
+        // Get current altitude for terrain matching (NED -> altitude)
+        double altitude = -ukf_state.position.z();
         rbpf_->updateTerrain(altitude);
     }
 
-    // Resample if necessary
-    // Resample is private - done internally by RBPF
+    // RBPF resampling handled internally
 
-    // Get position correction from RBPF
     // Get RBPF estimates
     auto rbpf_state = rbpf_->getMMSE();
     current_state_.position_correction = rbpf_state.position - ukf_state.position;
     current_state_.position_covariance = rbpf_->getCovariance().block<3,3>(0,0);
+
+    // If the particle spread is tight, treat as a reliable map fix
+    double quality = computeMapMatchingQuality();
+    if (quality > 0.8) {
+        last_map_fix_time_ = current_state_.timestamp;
+    }
 
     // Track RBPF compute time
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -365,35 +423,42 @@ Vector3d HierarchicalFilter::getRBPFCorrection() {
     if (current_mode_ == FilterMode::UKF_ONLY) {
         return Vector3d::Zero();
     }
-
     return current_state_.position_correction;
 }
 
 CombinedState HierarchicalFilter::fuseEstimates(const StateVector& ukf_state,
-                                               const Eigen::Matrix<double, 21, 21>& ukf_cov,
-                                               const Vector3d& rbpf_correction,
-                                               const Eigen::Matrix3d& rbpf_cov) {
+                                                const Eigen::Matrix<double, 21, 21>& ukf_cov,
+                                                const Vector3d& rbpf_correction,
+                                                const Eigen::Matrix3d& rbpf_cov) {
     CombinedState fused;
 
     // Store raw estimates
-    fused.ukf_state = ukf_state;
-    fused.ukf_covariance = ukf_cov;
+    fused.ukf_state        = ukf_state;
+    fused.ukf_covariance   = ukf_cov;
     fused.position_correction = rbpf_correction;
     fused.position_covariance = rbpf_cov;
 
-    // Weighted fusion based on uncertainties
-    Matrix3d P_ukf = ukf_cov.block<3,3>(0,0);
-    Matrix3d P_rbpf = rbpf_cov;
+    // Weighted information filter fusion for position
+    Eigen::Matrix3d P_ukf = sanitizeCov(ukf_cov.block<3,3>(0,0));
+    Eigen::Matrix3d P_rb  = sanitizeCov(rbpf_cov);
 
-    // Information filter fusion
-    Matrix3d P_fused_inv = P_ukf.inverse() + config_.map_weight * P_rbpf.inverse();
-    Matrix3d P_fused = P_fused_inv.inverse();
+    // Precision matrices via solves (avoid explicit inverse where possible)
+    Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
+    Eigen::Matrix3d J_ukf = solveSPD(P_ukf, I);            // ~ P_ukf^{-1}
+    Eigen::Matrix3d J_rb  = solveSPD(P_rb,  I);            // ~ P_rb^{-1}
+
+    double w = clamp(config_.map_weight, 0.0, 1.0);
+
+    Eigen::Matrix3d J_fused = J_ukf + w * J_rb;
+    Eigen::Matrix3d P_fused = solveSPD(J_fused, I);        // (J_fused)^{-1}
 
     Vector3d pos_ukf = ukf_state.position;
-    Vector3d pos_rbpf = ukf_state.position + rbpf_correction;
+    Vector3d pos_rb  = ukf_state.position + rbpf_correction;
 
-    fused.position = P_fused * (P_ukf.inverse() * pos_ukf +
-                               config_.map_weight * P_rbpf.inverse() * pos_rbpf);
+    Vector3d b = J_ukf * pos_ukf + w * J_rb * pos_rb;
+    Vector3d pos_fused = P_fused * b;
+
+    fused.position = pos_fused;
 
     // Direct UKF velocity and attitude (not corrected by RBPF)
     fused.velocity = ukf_state.velocity;
@@ -406,7 +471,7 @@ CombinedState HierarchicalFilter::fuseEstimates(const StateVector& ukf_state,
     fused.covariance.block<3,3>(6,6) = ukf_cov.block<3,3>(6,6);  // Attitude
 
     // Compute confidence based on uncertainty
-    double pos_uncertainty = std::sqrt(P_fused.trace());
+    double pos_uncertainty = std::sqrt(std::max(1e-12, P_fused.trace()));
     fused.confidence = std::exp(-pos_uncertainty / 100.0);  // Exponential decay
 
     fused.mode = current_mode_;
@@ -431,7 +496,7 @@ bool HierarchicalFilter::checkResetConditions() {
         should_reset = true;
     }
 
-    // 2. NEES consistency
+    // 2. NEES consistency (proxy without ground truth)
     double nees = computeNEES();
     if (nees > config_.reset_triggers.nees_threshold) {
         {
@@ -477,7 +542,7 @@ void HierarchicalFilter::executeHardReset(const Vector3d& position_fix) {
     Eigen::Matrix<double, 21, 21> reset_cov = current_state_.ukf_covariance;
     reset_cov.block<3,3>(0,0) = Matrix3d::Identity() * 25.0;  // 5m std
 
-    // Reinitialize filters
+    // Reinitialize filters (fixed typo)
     ukf_->setState(reset_state);
     ukf_->setCovariance(reset_cov);
 
@@ -523,19 +588,27 @@ void HierarchicalFilter::updateAdaptiveRates() {
     // Adjust filter rates based on uncertainty
     double uncertainty = computeUncertaintyMetric();
 
+    // UKF
     if (uncertainty < 50.0) {
-        // Low uncertainty - reduce RBPF rate
+        adaptive_ukf_rate_ = config_.ukf_rate * 0.75;
+    } else if (uncertainty > 200.0) {
+        adaptive_ukf_rate_ = config_.ukf_rate * 1.5;
+    } else {
+        adaptive_ukf_rate_ = config_.ukf_rate;
+    }
+
+    // RBPF
+    if (uncertainty < 50.0) {
         adaptive_rbpf_rate_ = config_.rbpf_rate * 0.5;
     } else if (uncertainty > 200.0) {
-        // High uncertainty - increase RBPF rate
         adaptive_rbpf_rate_ = config_.rbpf_rate * 2.0;
     } else {
         adaptive_rbpf_rate_ = config_.rbpf_rate;
     }
 
     // Clamp rates
-    adaptive_ukf_rate_ = std::max(10.0, std::min(200.0, adaptive_ukf_rate_));
-    adaptive_rbpf_rate_ = std::max(0.1, std::min(10.0, adaptive_rbpf_rate_));
+    adaptive_ukf_rate_  = clamp(adaptive_ukf_rate_, 10.0, 200.0);
+    adaptive_rbpf_rate_ = clamp(adaptive_rbpf_rate_, 0.1, 10.0);
 }
 
 double HierarchicalFilter::computeUncertaintyMetric() const {
@@ -546,13 +619,12 @@ double HierarchicalFilter::computeUncertaintyMetric() const {
 double HierarchicalFilter::computeMapMatchingQuality() const {
     if (!rbpf_) return 0.0;
 
-    // Get particle spread as quality metric
-    // Get particle spread from covariance
+    // Particle spread as quality metric
     auto cov = rbpf_->getCovariance();
-    double spread = sqrt(cov.block<3,3>(0,0).trace());
+    double spread = std::sqrt(std::max(1e-12, cov.block<3,3>(0,0).trace()));
     double quality = std::exp(-spread / 100.0);  // Convert to [0,1]
 
-    return quality;
+    return clamp(quality, 0.0, 1.0);
 }
 
 void HierarchicalFilter::transitionMode(FilterMode new_mode) {
@@ -561,7 +633,7 @@ void HierarchicalFilter::transitionMode(FilterMode new_mode) {
     {
         std::stringstream msg;
         msg << "Transitioning from mode " << static_cast<int>(current_mode_)
-             << " to " << static_cast<int>(new_mode);
+            << " to " << static_cast<int>(new_mode);
         LOG_INFO(msg.str());
     }
 
@@ -580,15 +652,16 @@ void HierarchicalFilter::transitionMode(FilterMode new_mode) {
             config_.map_weight = 0.3;
             break;
 
-        case FilterMode::RBPF_RESET:
+        case FilterMode::RBPF_RESET: {
             // Prepare for reset
             config_.map_weight = 0.5;
-            if (maps_) {
+            if (rbpf_) {
                 // Get best position from map matching
                 Vector3d map_position = rbpf_->getMMSE().position;
                 executeHardReset(map_position);
             }
             break;
+        }
 
         case FilterMode::DEGRADED:
             // Reduce all corrections
@@ -634,34 +707,32 @@ bool HierarchicalFilter::checkFilterConsistency() {
 }
 
 double HierarchicalFilter::computeNEES() const {
-    // Normalized Estimation Error Squared
-    // Assumes ground truth available for comparison
-    // In practice, use map constraints or other reference
-
-    // Simplified version using covariance trace
-    double cov_trace = current_state_.covariance.trace();
-    return cov_trace / 9.0;  // Normalized by state dimension
+    // Proxy NEES without ground truth: use normalized trace of position covariance
+    // (dimension = 3). This is heuristic but monotonic to dispersion.
+    double tr = current_state_.covariance.block<3,3>(0,0).trace();
+    tr = std::max(1e-12, tr);
+    return tr / 3.0;
 }
 
 double HierarchicalFilter::computeNIS(const VectorXd& innovation,
-                                     const MatrixXd& S) const {
+                                      const MatrixXd& S) const {
     // Normalized Innovation Squared
     return innovation.transpose() * S.inverse() * innovation;
 }
 
 bool HierarchicalFilter::isOutlier(const SensorData& data) {
     // Simplified outlier detection
-    // In practice, use Mahalanobis distance with proper thresholds
-
     if (data.has_baro) {
         // Check altitude consistency
-        double expected_alt = -current_state_.position.z();
+        double expected_alt = -current_state_.position.z(); // NED -> altitude
         double measured_alt = data.barometer.altitude;
         double diff = std::abs(expected_alt - measured_alt);
 
-        return diff > 50.0;  // 50m threshold
+        // Threshold adaptive with current vertical std if available
+        double vz_std = std::sqrt(std::max(1e-6, current_state_.covariance(2,2)));
+        double thresh = std::max(50.0, 5.0 * vz_std); // at least 50m, else 5-sigma
+        return diff > thresh;
     }
-
     return false;
 }
 
@@ -677,9 +748,9 @@ void HierarchicalFilter::logFilterState() {
     {
         std::stringstream msg;
         msg << "Filter State - Mode: " << static_cast<int>(current_mode_)
-              << ", Position: " << current_state_.position.transpose()
-              << ", Uncertainty: " << computeUncertaintyMetric()
-              << ", Confidence: " << current_state_.confidence;
+            << ", Position: " << current_state_.position.transpose()
+            << ", Uncertainty: " << computeUncertaintyMetric()
+            << ", Confidence: " << current_state_.confidence;
         LOG_DEBUG(msg.str());
     }
 }
@@ -688,7 +759,7 @@ void HierarchicalFilter::logPerformanceMetrics() {
     if (perf_monitor_) {
         perf_monitor_->recordMetric("fusion_time", fusion_compute_time_);
         perf_monitor_->recordMetric("total_filter_time",
-                                   ukf_compute_time_ + rbpf_compute_time_ + fusion_compute_time_);
+            ukf_compute_time_ + rbpf_compute_time_ + fusion_compute_time_);
         perf_monitor_->recordMetric("position_uncertainty", computeUncertaintyMetric());
     }
 }
@@ -708,7 +779,7 @@ void FilterHealthMonitor::updateNEES(double nees) {
     }
 
     metrics_.nees_avg = std::accumulate(nees_history_.begin(), nees_history_.end(), 0.0) /
-                       nees_history_.size();
+                        static_cast<double>(nees_history_.size());
 }
 
 void FilterHealthMonitor::updateNIS(double nis) {
@@ -718,7 +789,7 @@ void FilterHealthMonitor::updateNIS(double nis) {
     }
 
     metrics_.nis_avg = std::accumulate(nis_history_.begin(), nis_history_.end(), 0.0) /
-                      nis_history_.size();
+                       static_cast<double>(nis_history_.size());
 }
 
 void FilterHealthMonitor::updateCovariance(const MatrixXd& P) {
@@ -734,10 +805,10 @@ void FilterHealthMonitor::recordOutlier() {
 
 bool FilterHealthMonitor::isHealthy() const {
     // Check health criteria
-    bool nees_ok = metrics_.nees_avg < 15.0;
-    bool nis_ok = metrics_.nis_avg < 12.0;
+    bool nees_ok     = metrics_.nees_avg < 15.0;
+    bool nis_ok      = metrics_.nis_avg < 12.0;
     bool outliers_ok = metrics_.outlier_count < 10;
-    bool cov_ok = metrics_.position_std < 100.0;
+    bool cov_ok      = metrics_.position_std < 100.0;
 
     return nees_ok && nis_ok && outliers_ok && cov_ok;
 }
@@ -784,9 +855,9 @@ AdaptiveController::AdaptiveController(const HierarchicalConfig& config) {
 }
 
 void AdaptiveController::adapt(const CombinedState& state,
-                              const FilterHealthMonitor& health) {
+                               const FilterHealthMonitor& health) {
     // Adapt rates based on uncertainty
-    params_.ukf_rate = computeOptimalUKFRate(state);
+    params_.ukf_rate  = computeOptimalUKFRate(state);
     params_.rbpf_rate = computeOptimalRBPFRate(state);
 
     // Adapt weighting based on health
@@ -800,7 +871,6 @@ double AdaptiveController::computeOptimalUKFRate(const CombinedState& state) {
     // Higher rate when uncertainty is high
     double uncertainty = std::sqrt(state.covariance.block<3,3>(0,0).trace());
     double rate_factor = 1.0 + (uncertainty / 100.0);
-
     return std::min(200.0, nominal_params_.ukf_rate * rate_factor);
 }
 
@@ -813,7 +883,6 @@ double AdaptiveController::computeOptimalRBPFRate(const CombinedState& state) {
     } else if (pos_uncertainty > 200.0) {
         return nominal_params_.rbpf_rate * 2.0;
     }
-
     return nominal_params_.rbpf_rate;
 }
 
@@ -839,7 +908,7 @@ void AdaptiveController::adaptNoiseParameters(const FilterHealthMonitor& health)
     }
 
     // Clamp scales
-    params_.process_noise_scale = std::max(0.1, std::min(10.0, params_.process_noise_scale));
+    params_.process_noise_scale     = std::max(0.1, std::min(10.0, params_.process_noise_scale));
     params_.measurement_noise_scale = std::max(0.1, std::min(10.0, params_.measurement_noise_scale));
 }
 
@@ -860,13 +929,10 @@ void MultiHypothesisTracker::addHypothesis(const CombinedState& state, double li
     hypotheses_.push_back(hyp);
 
     // Normalize weights
-    double total_weight = 0;
-    for (const auto& h : hypotheses_) {
-        total_weight += h.weight;
-    }
-    for (auto& h : hypotheses_) {
-        h.weight /= total_weight;
-    }
+    double total_weight = 0.0;
+    for (const auto& h : hypotheses_) total_weight += h.weight;
+    if (total_weight <= 0.0) total_weight = 1.0;
+    for (auto& h : hypotheses_) h.weight /= total_weight;
 
     {
         std::stringstream msg;
@@ -875,26 +941,19 @@ void MultiHypothesisTracker::addHypothesis(const CombinedState& state, double li
     }
 }
 
-void MultiHypothesisTracker::updateHypotheses(const SensorData& measurement) {
-    // Update each hypothesis with measurement
+void MultiHypothesisTracker::updateHypotheses(const SensorData& /*measurement*/) {
+    // Placeholder: real implementation should compute likelihood via measurement model
     for (auto& hyp : hypotheses_) {
-        // Compute likelihood of measurement given hypothesis
-        // Simplified version - in practice, use proper measurement model
-        double innovation = 0;  // Compute actual innovation
-
+        double innovation = 0.0;  // TODO: compute innovation properly
         hyp.likelihood = std::exp(-innovation * innovation / 2.0);
         hyp.weight *= hyp.likelihood;
     }
 
     // Normalize weights
-    double total_weight = 0;
-    for (const auto& h : hypotheses_) {
-        total_weight += h.weight;
-    }
-    if (total_weight > 0) {
-        for (auto& h : hypotheses_) {
-            h.weight /= total_weight;
-        }
+    double total_weight = 0.0;
+    for (const auto& h : hypotheses_) total_weight += h.weight;
+    if (total_weight > 0.0) {
+        for (auto& h : hypotheses_) h.weight /= total_weight;
     }
 }
 
@@ -902,20 +961,20 @@ void MultiHypothesisTracker::pruneHypotheses() {
     // Remove low-weight hypotheses
     hypotheses_.erase(
         std::remove_if(hypotheses_.begin(), hypotheses_.end(),
-                      [this](const Hypothesis& h) {
-                          return h.weight < pruning_threshold_;
-                      }),
+                       [this](const Hypothesis& h) {
+                           return h.weight < pruning_threshold_;
+                       }),
         hypotheses_.end()
     );
 
     // Keep only top N hypotheses
     if (hypotheses_.size() > max_hypotheses_) {
         std::partial_sort(hypotheses_.begin(),
-                         hypotheses_.begin() + max_hypotheses_,
-                         hypotheses_.end(),
-                         [](const Hypothesis& a, const Hypothesis& b) {
-                             return a.weight > b.weight;
-                         });
+                          hypotheses_.begin() + max_hypotheses_,
+                          hypotheses_.end(),
+                          [](const Hypothesis& a, const Hypothesis& b) {
+                              return a.weight > b.weight;
+                          });
         hypotheses_.resize(max_hypotheses_);
     }
 }
@@ -927,7 +986,7 @@ void MultiHypothesisTracker::mergeHypotheses() {
     for (size_t i = 0; i < hypotheses_.size(); ++i) {
         for (size_t j = i + 1; j < hypotheses_.size(); ) {
             double dist = (hypotheses_[i].state.position -
-                         hypotheses_[j].state.position).norm();
+                           hypotheses_[j].state.position).norm();
 
             if (dist < merge_threshold) {
                 // Merge j into i
@@ -949,9 +1008,9 @@ CombinedState MultiHypothesisTracker::getBestEstimate() const {
 
     // Return highest weight hypothesis
     auto best = std::max_element(hypotheses_.begin(), hypotheses_.end(),
-                                [](const Hypothesis& a, const Hypothesis& b) {
-                                    return a.weight < b.weight;
-                                });
+                                 [](const Hypothesis& a, const Hypothesis& b) {
+                                     return a.weight < b.weight;
+                                 });
 
     return best->state;
 }
@@ -974,14 +1033,14 @@ double MultiHypothesisTracker::getAmbiguityLevel() const {
     if (hypotheses_.empty()) return 1.0;
 
     // Compute entropy of weight distribution
-    double entropy = 0;
+    double entropy = 0.0;
     for (const auto& h : hypotheses_) {
-        if (h.weight > 0) {
+        if (h.weight > 0.0) {
             entropy -= h.weight * std::log(h.weight);
         }
     }
 
-    return entropy / std::log(hypotheses_.size());  // Normalize to [0,1]
+    return entropy / std::log(static_cast<double>(hypotheses_.size()));  // Normalize to [0,1]
 }
 
 /**
@@ -1027,7 +1086,7 @@ void HierarchicalFilter::updateMLBias(const Vector3d& bias_pred, double uncertai
 
         // Partial state update with uncertainty
         Eigen::Matrix<double, 21, 21> P = ukf_->getCovariance();
-        P.block<3,3>(9,9) = Eigen::Matrix3d::Identity() * uncertainty;
+        P.block<3,3>(9,9) = Eigen::Matrix3d::Identity() * std::max(1e-6, uncertainty);
 
         ukf_->setState(current);
         ukf_->setCovariance(P);
@@ -1047,15 +1106,15 @@ void HierarchicalFilter::updateRBPF(const std::vector<GradiometerData>& gravity_
             // Convert 6-element tensor to 5-element STF for RBPF
             Eigen::Matrix<double, 5, 1> tensor5;
             tensor5 << grad.tensor(0),   // Txx
-                      grad.tensor(3),   // Tyy
-                      grad.tensor(4),   // Tzz
-                      grad.tensor(1),   // Txy
-                      grad.tensor(2);   // Txz
+                       grad.tensor(3),   // Tyy
+                       grad.tensor(4),   // Tzz
+                       grad.tensor(1),   // Txy
+                       grad.tensor(2);   // Txz
             rbpf_->updateGravity(tensor5);
         }
 
         // Run full RBPF update
-        runRBPF(current_state_, 1.0 / config_.rbpf_rate);
+        runRBPF(current_state_, 1.0 / std::max(1e-6, config_.rbpf_rate));
 
         // Update position correction
         current_state_.position_correction = getRBPFCorrection();
@@ -1088,11 +1147,11 @@ HierarchicalFilter::ResetResult HierarchicalFilter::performReset() {
         {
             std::stringstream msg;
             msg << "Position reset #" << reset_count_ << " executed. Jump: "
-                 << result.position_jump << "m";
+                << result.position_jump << "m";
             LOG_INFO(msg.str());
         }
     } else {
-        result.position_jump = 0;
+        result.position_jump = 0.0;
         result.confidence = current_state_.confidence;
     }
 

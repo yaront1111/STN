@@ -260,7 +260,7 @@ InterpolationResult MapInterpolator::splineInterpolate(double lat, double lon) c
 }
 
 void MapInterpolator::computeBicubicCoeffs(int i, int j) {
-    if (i >= bicubic_coeffs_.size() || j >= bicubic_coeffs_[i].size()) {
+    if (static_cast<size_t>(i) >= bicubic_coeffs_.size() || static_cast<size_t>(j) >= bicubic_coeffs_[i].size()) {
         bicubic_coeffs_.resize(std::max(i + 1, static_cast<int>(bicubic_coeffs_.size())));
         bicubic_coeffs_[i].resize(std::max(j + 1, static_cast<int>(bicubic_coeffs_[i].size())));
     }
@@ -575,7 +575,7 @@ InterpolationResult AdaptiveInterpolator::interpolate(double lat, double lon,
                                                      double required_resolution) const {
     int lod = selectLOD(required_resolution);
 
-    if (lod < 0 || lod >= lod_grids_.size()) {
+    if (lod < 0 || static_cast<size_t>(lod) >= lod_grids_.size()) {
         InterpolationResult result;
         result.valid = false;
         return result;
@@ -598,7 +598,7 @@ int AdaptiveInterpolator::selectLOD(double required_resolution) const {
 }
 
 void AdaptiveInterpolator::clearLOD(int level) {
-    if (level >= 0 && level < lod_grids_.size()) {
+    if (level >= 0 && static_cast<size_t>(level) < lod_grids_.size()) {
         lod_grids_[level].values.resize(0, 0);
         {
 

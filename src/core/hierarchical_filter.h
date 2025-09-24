@@ -110,6 +110,7 @@ private:
     double ukf_compute_time_ = 0;
     double rbpf_compute_time_ = 0;
     double fusion_compute_time_ = 0;
+    double rbpf_timer_ = 0.0;
 
     // Adaptive rate control
     double adaptive_ukf_rate_;
@@ -266,10 +267,10 @@ private:
     AdaptiveParams params_;
     AdaptiveParams nominal_params_;
 
-    // Adaptation gains
-    double rate_adaptation_gain_ = 0.1;
-    double weight_adaptation_gain_ = 0.05;
-    double noise_adaptation_gain_ = 0.01;
+    // Adaptation gains (unused for now)
+    // double rate_adaptation_gain_ = 0.1;
+    // double weight_adaptation_gain_ = 0.05;
+    // double noise_adaptation_gain_ = 0.01;
 
 public:
     AdaptiveController(const HierarchicalConfig& config);

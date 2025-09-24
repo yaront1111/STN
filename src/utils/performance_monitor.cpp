@@ -28,7 +28,7 @@ namespace Navigation {
 // ScopedTimer Implementation
 
 ScopedTimer::ScopedTimer(const std::string& name, std::function<void(double)> callback)
-    : name_(name), callback_(callback), start_(steady_clock::now()) {
+    : name_(name), start_(steady_clock::now()), callback_(callback) {
 }
 
 ScopedTimer::~ScopedTimer() {

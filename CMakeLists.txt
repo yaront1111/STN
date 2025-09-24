@@ -35,9 +35,18 @@ endif()
 find_package(Threads REQUIRED)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
-# Find yaml-cpp using pkg-config
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(YAMLCPP REQUIRED yaml-cpp)
+# Find yaml-cpp
+find_package(yaml-cpp REQUIRED)
+if (yaml-cpp_FOUND)
+    set(YAMLCPP_LIBRARIES yaml-cpp::yaml-cpp)
+else()
+    # Fallback to manual search
+    find_library(YAMLCPP_LIBRARIES
+        NAMES yaml-cpp
+        PATHS /opt/homebrew/lib /usr/local/lib
+        NO_DEFAULT_PATH
+    )
+endif()
 
 # Find ONNX Runtime (optional for ML)
 find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
@@ -77,6 +86,7 @@ set(SOURCES
 
     # Maps
     src/maps/map_manager.cpp
+    src/maps/composite_map_manager.cpp
     src/maps/xgm2019e_map.cpp
     src/maps/srtm_terrain.cpp
     src/maps/map_interpolator.cpp
@@ -89,12 +99,14 @@ set(SOURCES
 
     # Debug/Analysis
     src/utils/trajectory_analyzer.cpp
+
+    # ML (with stub implementation when ONNX not available)
+    src/ml/onnx_predictor.cpp
 )
 
-# Add ML sources if ONNX is available
+# Add additional ML sources if ONNX is available
 if(HAVE_ONNX)
     list(APPEND SOURCES
-        src/ml/onnx_predictor.cpp
         src/ml/ood_detector.cpp
     )
 endif()
@@ -122,7 +134,6 @@ target_link_libraries(navigation_system
     Threads::Threads
     Eigen3::Eigen
     ${YAMLCPP_LIBRARIES}
-    stdc++fs  # For filesystem
 )
 
 if(HAVE_ONNX)

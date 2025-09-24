@@ -447,6 +447,14 @@ public:
             msg << "ML time: " << ml_time_ms_ << " ms";
             LOG_INFO(msg.str());
         }
+
+        // Calculate total processing time
+        total_time_ms_ = ukf_time_ms_ + rbpf_time_ms_ + ml_time_ms_;
+        {
+            std::stringstream msg;
+            msg << "Total processing time: " << total_time_ms_ << " ms";
+            LOG_INFO(msg.str());
+        }
         {
             std::stringstream msg;
             msg << "Average iteration: " << perf_monitor_->getAverageTime() << " ms";

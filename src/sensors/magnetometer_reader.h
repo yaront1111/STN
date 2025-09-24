@@ -41,13 +41,21 @@ struct MagnetometerConfig {
     bool field_in_ut = true;      // If true, multiply by 1e-6 (data is in microTesla)
     
     // Data validation
-    double max_field = 100e-6;    // Tesla (~100 µT max)
-    double min_field = 10e-6;     // Tesla (~10 µT min)
-    double disturbance_threshold = 70e-6;  // Disturbance detection
-    
+    double max_field = 100.0;     // microTesla (µT max)
+    double min_field = 10.0;      // microTesla (µT min)
+    double disturbance_threshold = 70e-6;  // Tesla - Disturbance detection
+    double expected_total_field_uT = 0.0;  // Expected total field in microTesla
+    double relative_disturbance_threshold = 0.1;  // Relative disturbance threshold
+    double zscore_disturbance_threshold = 3.0;    // Z-score disturbance threshold
+
     // Calibration
     Vector3d hard_iron_offset = Vector3d::Zero();
     Eigen::Matrix3d soft_iron_matrix = Eigen::Matrix3d::Identity();
+
+    // Temperature compensation
+    bool enable_temperature_comp = false;
+    double temp_ref_C = 25.0;
+    Vector3d temp_coeff_T_per_C = Vector3d::Zero();
 };
 
 /**
@@ -57,7 +65,7 @@ class MagnetometerReader {
 private:
     MagnetometerConfig config_;
     std::ifstream file_;
-    
+
     struct Stats {
         uint64_t total_samples = 0;
         uint64_t valid_samples = 0;
@@ -65,6 +73,15 @@ private:
         Vector3d min_field = Vector3d::Constant(1e9);
         Vector3d max_field = Vector3d::Constant(-1e9);
     } stats_;
+
+    // Cached validation ranges in Tesla
+    double min_field_T_;
+    double max_field_T_;
+    double expected_total_field_T_;
+
+    // EWMA statistics for disturbance detection
+    double ewma_total_field_T_ = 0.0;
+    double ewma_var_total_field_T2_ = 0.0;
     
 public:
     MagnetometerReader(const MagnetometerConfig& config);
@@ -81,7 +98,7 @@ public:
     void applyCalibration(MagnetometerData& data);
     
     // Magnetic field analysis
-    static void computeMagneticElements(MagnetometerData& data);
+    void computeMagneticElements(MagnetometerData& data);
     
     Stats getStatistics() const { return stats_; }
     void printStatistics() const;

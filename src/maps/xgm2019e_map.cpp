@@ -471,7 +471,7 @@ void XGM2019eMap::computeNormalizationFactors(int max_degree) {
 }
 
 double XGM2019eMap::getNormFactor(int n, int m) const {
-    if (n < 0 || m < 0 || m > n || n >= norm_factors_.size()) return 1.0;
+    if (n < 0 || m < 0 || m > n || static_cast<size_t>(n) >= norm_factors_.size()) return 1.0;
     return norm_factors_[n][m];
 }
 
