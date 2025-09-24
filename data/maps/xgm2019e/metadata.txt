@@ -1,0 +1,19 @@
+XGM2019e Synthetic Data
+=======================
+
+Generated for GPS-Free Navigation System Testing
+
+Grid Parameters:
+  Resolution: 1 degrees
+  Latitude points: 181 (-90 to +90)
+  Longitude points: 361 (-180 to +180)
+
+Data Files:
+  coefficients.dat - Spherical harmonic coefficients
+  anomaly_1arcmin.dat - Gravity anomaly grid (mGal)
+  gradient_tensor.dat - Gravity gradient tensor grid (Eotvos)
+
+Reference System:
+  Ellipsoid: WGS84
+  Tide System: Tide-free
+  Units: mGal (anomaly), Eotvos (gradients)

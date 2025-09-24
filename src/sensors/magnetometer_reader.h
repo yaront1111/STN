@@ -38,7 +38,7 @@ struct MagnetometerConfig {
     double field_scale = 1.0;     // Convert to Tesla
     double time_scale = 1.0;      // Convert to seconds
     bool field_in_gauss = false;  // If true, multiply by 1e-4
-    bool field_in_ut = false;     // If true, multiply by 1e-6
+    bool field_in_ut = true;      // If true, multiply by 1e-6 (data is in microTesla)
     
     // Data validation
     double max_field = 100e-6;    // Tesla (~100 µT max)

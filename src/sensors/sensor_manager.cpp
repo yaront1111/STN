@@ -15,20 +15,20 @@ namespace Navigation {
 SensorManager::SensorManager(const YAML::Node& node) {
     // Parse YAML config
     if (node["imu"]) {
-        config_.imu_config.csv_path = node["imu"]["file"].as<std::string>("");
-        config_.imu_rate = node["imu"]["rate"].as<double>(100.0);
+        config_.imu_config.csv_path = node["imu"]["csv_path"].as<std::string>("");
+        config_.imu_rate = node["imu"]["rate_hz"].as<double>(100.0);
     }
     if (node["barometer"]) {
-        config_.baro_config.csv_path = node["barometer"]["file"].as<std::string>("");
-        config_.baro_rate = node["barometer"]["rate"].as<double>(10.0);
+        config_.baro_config.csv_path = node["barometer"]["csv_path"].as<std::string>("");
+        config_.baro_rate = node["barometer"]["rate_hz"].as<double>(10.0);
     }
     if (node["magnetometer"]) {
-        config_.mag_config.csv_path = node["magnetometer"]["file"].as<std::string>("");
-        config_.mag_rate = node["magnetometer"]["rate"].as<double>(10.0);
+        config_.mag_config.csv_path = node["magnetometer"]["csv_path"].as<std::string>("");
+        config_.mag_rate = node["magnetometer"]["rate_hz"].as<double>(10.0);
     }
     if (node["gradiometer"]) {
-        config_.grav_config.csv_path = node["gradiometer"]["file"].as<std::string>("");
-        config_.grav_rate = node["gradiometer"]["rate"].as<double>(1.0);
+        config_.grav_config.csv_path = node["gradiometer"]["csv_path"].as<std::string>("");
+        config_.grav_rate = node["gradiometer"]["rate_hz"].as<double>(1.0);
     }
 
     LOG_INFO("SensorManager initialized from YAML config");

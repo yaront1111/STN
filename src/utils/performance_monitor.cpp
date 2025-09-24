@@ -391,14 +391,18 @@ void PerformanceMonitor::logPerformance() const {
     auto perf = getSystemPerformance();
     
     LOG_INFO("=== Performance Summary ===");
-    LOG_INFO("Iterations: " << perf.total_iterations 
-             << " at " << std::fixed << std::setprecision(1) 
-             << perf.iterations_per_second << " Hz");
+    {
+        std::stringstream msg;
+        msg << "Iterations: " << perf.total_iterations
+            << " at " << std::fixed << std::setprecision(1)
+            << perf.iterations_per_second << " Hz";
+        LOG_INFO(msg.str());
+    }
     {
 
         std::stringstream msg;
 
-        msg << "Total timing: " << std::fixed << std::setprecision(2;
+        msg << "Total timing: " << std::fixed << std::setprecision(2);
 
         LOG_INFO(msg.str());
 
@@ -407,17 +411,23 @@ void PerformanceMonitor::logPerformance() const {
 
         std::stringstream msg;
 
-        msg << "Budget usage: " << std::fixed << std::setprecision(1;
+        msg << "Budget usage: " << std::fixed << std::setprecision(1);
 
         LOG_INFO(msg.str());
 
     }
-    LOG_INFO("Violations: " << perf.budget_violations 
-             << " (" << 100.0 * perf.budget_violations / perf.total_iterations << "%)");
+    {
+        std::stringstream msg;
+        msg << "Violations: " << perf.budget_violations
+            << " (" << 100.0 * perf.budget_violations / perf.total_iterations << "%)";
+        LOG_INFO(msg.str());
+    }
     
     if (!perf.real_time_capable) {
-        LOG_WARN("System NOT real-time capable! P95=" 
-                << perf.total_timing.p95_ms << " ms > budget");
+        std::stringstream warn;
+        warn << "System NOT real-time capable! P95="
+             << perf.total_timing.p95_ms << " ms > budget";
+        LOG_WARN(warn.str());
     }
 }
 
@@ -438,13 +448,15 @@ void PerformanceMonitor::logDetailedStats() const {
 
             std::stringstream msg;
 
-            msg << "  Min/Avg/Max: " << std::fixed << std::setprecision(2;
+            msg << "  Min/Avg/Max: " << std::fixed << std::setprecision(2);
 
             LOG_INFO(msg.str());
 
         }
-        LOG_INFO("  P50/P95/P99: " << stats.p50_ms << "/" 
-                << stats.p95_ms << "/" << stats.p99_ms << " ms");
+        std::stringstream p_msg;
+        p_msg << "  P50/P95/P99: " << stats.p50_ms << "/"
+              << stats.p95_ms << "/" << stats.p99_ms << " ms";
+        LOG_INFO(p_msg.str());
         {
 
             std::stringstream msg;
@@ -482,7 +494,7 @@ void PerformanceMonitor::logResourceUsage() const {
 
         std::stringstream msg;
 
-        msg << "CPU: " << std::fixed << std::setprecision(1;
+        msg << "CPU: " << std::fixed << std::setprecision(1);
 
         LOG_INFO(msg.str());
 
@@ -491,7 +503,7 @@ void PerformanceMonitor::logResourceUsage() const {
 
         std::stringstream msg;
 
-        msg << "Memory: " << std::fixed << std::setprecision(1;
+        msg << "Memory: " << std::fixed << std::setprecision(1);
 
         LOG_INFO(msg.str());
 
@@ -589,7 +601,8 @@ ResourceUsage PerformanceMonitor::getResourcesMacOS() const {
     
     if (task_info(task, TASK_BASIC_INFO, (task_info_t)&info, &size) == KERN_SUCCESS) {
         usage.memory_mb = info.resident_size / (1024.0 * 1024.0);
-        usage.thread_count = info.thread_count;
+        // thread_count is not available in task_basic_info on macOS
+        // usage.thread_count = info.thread_count;
     }
     
     // CPU usage would require tracking time deltas

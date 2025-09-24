@@ -1,0 +1,25 @@
+SRTM Synthetic Terrain Data
+============================
+
+Generated for GPS-Free Navigation System Testing
+
+Coverage:
+  Region: Western United States (demo)
+  Latitude: 30°N to 40°N
+  Longitude: 120°W to 110°W
+
+Resolution:
+  Spatial: 1 arc-minute (simplified from 1 arc-second)
+  Vertical: 1 meter
+
+Data Format:
+  Type: Binary float32
+  Units: Meters above EGM96 geoid
+  No-data value: -32768
+
+Features:
+  - Pacific Ocean depths
+  - Sierra Nevada mountains
+  - Rocky Mountains
+  - Central Valley
+  - Realistic terrain roughness

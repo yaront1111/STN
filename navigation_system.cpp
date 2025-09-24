@@ -112,6 +112,12 @@ public:
         LOG_INFO("Initializing sensor manager with real data...");
         sensors_ = std::make_unique<SensorManager>(config_["sensors"]);
 
+        // Initialize sensors (opens files)
+        if (!sensors_->initialize()) {
+            LOG_ERROR("Failed to initialize sensors");
+            throw std::runtime_error("Failed to initialize sensors");
+        }
+
         // Validate sensor data files exist and are readable
         if (!sensors_->validateDataFiles()) {
             LOG_ERROR("Sensor data files validation failed");
@@ -122,7 +128,13 @@ public:
         LOG_INFO("Loading map data (XGM2019e gravity, SRTM terrain)...");
         maps_ = std::make_unique<CompositeMapManager>(config_["maps"]);
 
-        // Verify map data integrity
+        // Initialize maps first
+        if (!maps_->initialize()) {
+            LOG_ERROR("Map initialization failed");
+            throw std::runtime_error("Failed to initialize maps");
+        }
+
+        // Then verify map data integrity
         if (!maps_->validateMaps()) {
             LOG_ERROR("Map data validation failed");
             throw std::runtime_error("Invalid map data");
@@ -300,15 +312,25 @@ public:
         // IMU prediction
         filter_->predictUKF(sensor_data.imu, sensor_data.dt);
 
-        // Measurement updates
+        // Measurement updates with dimension checks
         if (sensor_data.has_baro) {
             filter_->updateBarometer(sensor_data.barometer);
         }
         if (sensor_data.has_mag) {
-            filter_->updateMagnetometer(sensor_data.magnetometer);
+            // Validate magnetometer data dimension
+            if (sensor_data.magnetometer.field.size() == 3) {
+                filter_->updateMagnetometer(sensor_data.magnetometer);
+            } else {
+                LOG_ERROR("Invalid magnetometer field dimension");
+            }
         }
         if (sensor_data.has_grad) {
-            filter_->updateGravity(sensor_data.gradiometer);
+            // Validate gradiometer tensor dimension
+            if (sensor_data.gradiometer.tensor.size() == 6) {
+                filter_->updateGravity(sensor_data.gradiometer);
+            } else {
+                LOG_ERROR("Invalid gradiometer tensor dimension");
+            }
         }
 
         ukf_time_ms_ = duration_cast<microseconds>(

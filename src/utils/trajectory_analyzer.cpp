@@ -142,21 +142,23 @@ void TrajectoryAnalyzer::addEstimatedPoint(const CombinedState& state) {
 }
 
 void TrajectoryAnalyzer::addEstimatedPoint(const TrajectoryPoint& point) {
+    TrajectoryPoint mutable_point = point;
+
     // Detect outliers
-    if (detectOutlier(point)) {
+    if (detectOutlier(mutable_point)) {
         cumulative_metrics_.total_outliers++;
-        point.outlier_count = cumulative_metrics_.total_outliers;
+        mutable_point.outlier_count = cumulative_metrics_.total_outliers;
     }
 
     // Detect resets
     if (!estimated_trajectory_.empty()) {
-        if (detectReset(point, estimated_trajectory_.back())) {
+        if (detectReset(mutable_point, estimated_trajectory_.back())) {
             cumulative_metrics_.total_resets++;
             {
 
                 std::stringstream msg;
 
-                msg << "Reset detected at t=" << point.timestamp;
+                msg << "Reset detected at t=" << mutable_point.timestamp;
 
                 LOG_WARN(msg.str());
 
@@ -165,7 +167,7 @@ void TrajectoryAnalyzer::addEstimatedPoint(const TrajectoryPoint& point) {
     }
 
     // Add to trajectory
-    estimated_trajectory_.push_back(point);
+    estimated_trajectory_.push_back(mutable_point);
 
     // Limit size
     if (estimated_trajectory_.size() > max_trajectory_size_) {
@@ -244,9 +246,25 @@ bool TrajectoryAnalyzer::loadGroundTruth(const std::string& filename) {
            >> truth.velocity.z() >> comma
            >> roll >> comma >> pitch >> comma >> yaw;
 
-        // Convert Euler to quaternion
-        truth.attitude = MathUtils::eulerToQuaternion(
-            Vector3d(roll * M_PI/180, pitch * M_PI/180, yaw * M_PI/180));
+        // Convert Euler angles to quaternion
+        double roll_rad = roll * M_PI / 180.0;
+        double pitch_rad = pitch * M_PI / 180.0;
+        double yaw_rad = yaw * M_PI / 180.0;
+
+        // Manual conversion from Euler angles to quaternion
+        double cy = cos(yaw_rad * 0.5);
+        double sy = sin(yaw_rad * 0.5);
+        double cp = cos(pitch_rad * 0.5);
+        double sp = sin(pitch_rad * 0.5);
+        double cr = cos(roll_rad * 0.5);
+        double sr = sin(roll_rad * 0.5);
+
+        truth.attitude = Quaterniond(
+            cr * cp * cy + sr * sp * sy,  // w
+            sr * cp * cy - cr * sp * sy,  // x
+            cr * sp * cy + sr * cp * sy,  // y
+            cr * cp * sy - sr * sp * cy   // z
+        );
 
         truth.valid = true;
         truth_trajectory_.push_back(truth);
@@ -979,7 +997,8 @@ double TrajectoryAnalyzer::computeStd(const std::vector<double>& values) const {
 
 void TrajectoryAnalyzer::logTrajectoryPoint(const TrajectoryPoint& point) {
     // Convert quaternion to Euler angles for logging
-    Vector3d euler = MathUtils::quaternionToEuler(point.attitude) * 180.0 / M_PI;
+    Matrix3d R = point.attitude.toRotationMatrix();
+    Vector3d euler = R.eulerAngles(0, 1, 2) * 180.0 / M_PI;
 
     trajectory_file_ << std::fixed << std::setprecision(6)
                     << point.timestamp << ","

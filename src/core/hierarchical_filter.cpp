@@ -226,7 +226,14 @@ CombinedState HierarchicalFilter::processMeasurement(const SensorData& data) {
         ukf_->updateGradiometer(data.gradiometer);
         // Also update RBPF with gravity data
         if (current_mode_ == FilterMode::UKF_RBPF) {
-            rbpf_->updateGravity(data.gradiometer.tensor.head<5>());
+            // Convert 6-element tensor to 5-element STF for RBPF
+            Eigen::Matrix<double, 5, 1> tensor5;
+            tensor5 << data.gradiometer.tensor(0),   // Txx
+                      data.gradiometer.tensor(3),   // Tyy
+                      data.gradiometer.tensor(4),   // Tzz
+                      data.gradiometer.tensor(1),   // Txy
+                      data.gradiometer.tensor(2);   // Txz
+            rbpf_->updateGravity(tensor5);
         }
     }
 
@@ -1037,7 +1044,14 @@ void HierarchicalFilter::updateRBPF(const std::vector<GradiometerData>& gravity_
     if (rbpf_ && !gravity_buffer.empty()) {
         // Process gravity measurements through RBPF
         for (const auto& grad : gravity_buffer) {
-            rbpf_->updateGravity(grad.tensor.head<5>());
+            // Convert 6-element tensor to 5-element STF for RBPF
+            Eigen::Matrix<double, 5, 1> tensor5;
+            tensor5 << grad.tensor(0),   // Txx
+                      grad.tensor(3),   // Tyy
+                      grad.tensor(4),   // Tzz
+                      grad.tensor(1),   // Txy
+                      grad.tensor(2);   // Txz
+            rbpf_->updateGravity(tensor5);
         }
 
         // Run full RBPF update

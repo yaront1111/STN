@@ -154,17 +154,27 @@ bool MagnetometerReader::parseLine(const std::string& line, MagnetometerData& da
     
     try {
         data.timestamp = std::stod(tokens[config_.col_timestamp]) * config_.time_scale;
-        
-        data.field.x() = std::stod(tokens[config_.col_mag_x]) * config_.field_scale;
-        data.field.y() = std::stod(tokens[config_.col_mag_y]) * config_.field_scale;
-        data.field.z() = std::stod(tokens[config_.col_mag_z]) * config_.field_scale;
-        
-        // Convert units if needed
+
+        // Read raw values
+        double mx = std::stod(tokens[config_.col_mag_x]) * config_.field_scale;
+        double my = std::stod(tokens[config_.col_mag_y]) * config_.field_scale;
+        double mz = std::stod(tokens[config_.col_mag_z]) * config_.field_scale;
+
+        // Convert units BEFORE storing in field vector
         if (config_.field_in_gauss) {
-            data.field *= 1e-4;  // Gauss to Tesla
+            mx *= 1e-4;  // Gauss to Tesla
+            my *= 1e-4;
+            mz *= 1e-4;
         } else if (config_.field_in_ut) {
-            data.field *= 1e-6;  // microTesla to Tesla
+            mx *= 1e-6;  // microTesla to Tesla
+            my *= 1e-6;
+            mz *= 1e-6;
         }
+
+        // Store converted values
+        data.field.x() = mx;
+        data.field.y() = my;
+        data.field.z() = mz;
         
         // Temperature if available
         if (config_.col_temperature >= 0 && config_.col_temperature < static_cast<int>(tokens.size())) {

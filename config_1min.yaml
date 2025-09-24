@@ -1,16 +1,16 @@
-# GPS-Free Navigation System Configuration
-# Complete configuration for real data processing
-# No simulation parameters - only real data
+# GPS-Free Navigation System Configuration - 1 Minute Test
+# Optimized for quick testing and evaluation
 
 system:
-  mode: "real_data"  # MUST be real_data - no simulation allowed
+  mode: "real_data"
   data_path: "data/flight/"
   log_path: "logs/"
-  log_level: "DEBUG"  # DEBUG, INFO, WARN, ERROR
+  log_level: "INFO"  # Reduced logging for performance
   thread_count: 4
-  seed: 42  # For reproducibility
+  seed: 42
+  max_duration_s: 60.0  # Stop after 1 minute
 
-# Initial state (only used if no GPS available for initialization)
+# Initial state
 initial_state:
   position: [0.0, 0.0, -1000.0]  # [x, y, z] in NED frame (m)
   velocity: [0.0, 0.0, 0.0]       # [vn, ve, vd] in NED frame (m/s)
@@ -20,7 +20,7 @@ initial_state:
 performance:
   budget_ms: 10.0  # 100 Hz = 10ms per iteration
   profile: true
-  log_frequency: 100  # Log performance every N iterations
+  log_frequency: 1000  # Log every 10 seconds at 100Hz
 
 # Data validation parameters
 validation:
@@ -40,96 +40,96 @@ validation:
 # Square-Root UKF Configuration
 ukf:
   state_dimension: 21
-  error_state_dimension: 20  # 3 less for attitude error state
+  error_state_dimension: 20
 
   # Sigma point parameters
   sigma_points:
     alpha: 0.001
     beta: 2.0
-    kappa: -18  # 3 - state_dim
+    kappa: -18
 
-  # Process noise (from Allan variance analysis)
+  # Process noise
   process_noise:
-    position: 0.01      # m²/s
-    velocity: 0.1       # m²/s³
-    attitude: 1.0e-6    # rad²/s
-    accel_bias: 1.0e-8  # m²/s⁵
-    gyro_bias: 1.0e-10  # rad²/s³
-    gravity_bias: 1.0e-12 # E²/s
+    position: 0.01
+    velocity: 0.1
+    attitude: 1.0e-6
+    accel_bias: 1.0e-8
+    gyro_bias: 1.0e-10
+    gravity_bias: 1.0e-12
     temperature_compensation: true
     adaptive_scaling: true
 
   # Measurement noise
   measurement_noise:
-    barometer: 1.0      # m²
-    magnetometer: 0.01  # rad²
-    gravity_gradient: 100.0  # E²
-    ml_bias_base: 1.0e-6  # (m/s²)² and (rad/s)²
+    barometer: 1.0
+    magnetometer: 0.01
+    gravity_gradient: 100.0
+    ml_bias_base: 1.0e-6
 
   # Initial covariance
   initial_covariance:
-    position: 100.0     # m²
-    velocity: 1.0       # (m/s)²
-    attitude: 0.01      # rad²
-    accel_bias: 1.0e-4  # (m/s²)²
-    gyro_bias: 1.0e-6   # (rad/s)²
-    gravity_bias: 100.0 # E²
+    position: 100.0
+    velocity: 1.0
+    attitude: 0.01
+    accel_bias: 1.0e-4
+    gyro_bias: 1.0e-6
+    gravity_bias: 100.0
 
   # Robust estimation
   robust_estimation:
     enable: true
-    huber_threshold: 3.0  # Standard deviations
+    huber_threshold: 3.0
 
   # Out-of-sequence measurement handling
   oosm:
-    enable: true
-    method: "hybrid"  # fixed-lag smoother < 0.5s, Schmidt > 0.5s
+    enable: false  # Disabled for 1-minute test
+    method: "hybrid"
     lag_switch_s: 0.5
     max_lag_s: 1.0
     buffer_size: 10
 
 # Rao-Blackwellized Particle Filter Configuration
 rbpf:
-  num_particles: 1000
+  num_particles: 100  # Match initialization in code
   adaptive_particles:
-    enable: true
-    min_particles: 500
-    max_particles: 5000
+    enable: false  # Disabled for consistent timing
+    min_particles: 100
+    max_particles: 100
 
-  update_interval_s: 30.0
+  update_interval_s: 10.0  # More frequent updates for 1-minute test
 
-  proposal: "ukf_based"  # Use UKF for importance density
+  proposal: "ukf_based"
 
   # Thread pool for parallel processing
   parallelization:
     enable: true
     thread_pool_size: 4
-    tile_cache_mb: 512
+    tile_cache_mb: 256
 
   # Resampling configuration
   resampling:
     method: "systematic"
-    threshold: 0.5  # Effective sample size ratio
+    threshold: 0.5
     roughening:
       enable: true
-      adaptive: true
+      adaptive: false
       base_sigma: 0.01
       gradient_scaling: true
 
   # Confidence and reset
   confidence:
     calibrated: true
-    multimodal_check: true
+    multimodal_check: false  # Disabled for speed
     hartigan_threshold: 0.05
-    min_confidence: 0.9
-    min_hold_time_s: 10.0
+    min_confidence: 0.8  # Reduced for 1-minute test
+    min_hold_time_s: 5.0
 
   reset:
     enable: true
-    require_unimodal: true
-    min_interval_s: 60.0
+    require_unimodal: false
+    min_interval_s: 20.0  # Allow up to 3 resets in 1 minute
     partial_states: ["position", "velocity", "yaw"]
-    nees_upper_guard: 12.8  # chi²(3, 0.999)
+    nees_upper_guard: 12.8
     fisher_cond_max: 1.0e6
 
 # Sensor Configuration
@@ -138,7 +138,7 @@ sensors:
   imu:
     csv_path: "data/flight/imu.csv"
     rate_hz: 100
-    format: "csv"  # csv or binary
+    format: "csv"
     columns: ["timestamp", "ax", "ay", "az", "gx", "gy", "gz", "temp"]
 
     # Calibration parameters
@@ -150,14 +150,13 @@ sensors:
 
     # Allan variance parameters
     allan_variance:
-      arw: 0.003       # deg/√hr
-      vrw: 0.02        # m/s/√hr
-      accel_bias_instability: 0.01  # m/s²
-      gyro_bias_instability: 0.01   # deg/hr
+      arw: 0.003
+      vrw: 0.02
+      accel_bias_instability: 0.01
+      gyro_bias_instability: 0.01
 
-    # Lever arm from body center
-    lever_arm: [0.0, 0.0, 0.0]  # meters
-    misalignment: [0.0, 0.0, 0.0]  # degrees
+    lever_arm: [0.0, 0.0, 0.0]
+    misalignment: [0.0, 0.0, 0.0]
 
   # Barometer
   barometer:
@@ -165,12 +164,9 @@ sensors:
     rate_hz: 10
     format: "csv"
     columns: ["timestamp", "pressure", "temperature"]
-
-    # Atmospheric model
-    atmospheric_model: "hypsometric"  # hypsometric or ISA
+    atmospheric_model: "hypsometric"
     qnh_hpa: 1013.25
-
-    lever_arm: [0.1, 0.0, -0.05]  # meters
+    lever_arm: [0.1, 0.0, -0.05]
 
   # Magnetometer
   magnetometer:
@@ -186,28 +182,21 @@ sensors:
                   [0.0, 1.0, 0.0],
                   [0.0, 0.0, 1.0]]
 
-    # Reference model
     reference_model: "IGRF-13"
-
-    lever_arm: [0.2, 0.0, 0.0]  # meters
-    misalignment: [0.0, 0.0, 0.0]  # degrees
+    lever_arm: [0.2, 0.0, 0.0]
+    misalignment: [0.0, 0.0, 0.0]
 
   # Gradiometer
   gradiometer:
     csv_path: "data/flight/gradiometer.csv"
     rate_hz: 1
     format: "csv"
-    columns: ["timestamp", "gxx", "gxy", "gxz", "gyy", "gyz"]  # 5 independent STF components
-
-    # Noise characteristics
-    noise_e: 10.0  # Eötvös
+    columns: ["timestamp", "gxx", "gxy", "gxz", "gyy", "gyz"]
+    noise_e: 10.0
     bias_stability_e_hr: 1.0
-
-    # Reference frame
     frame: "NED"
-
-    lever_arm: [0.0, 0.0, 0.5]  # meters
-    misalignment: [0.0, 0.0, 0.0]  # degrees
+    lever_arm: [0.0, 0.0, 0.5]
+    misalignment: [0.0, 0.0, 0.0]
 
 # Map Configuration
 maps:
@@ -234,42 +223,16 @@ maps:
 
 # Machine Learning Configuration
 ml:
-  enable: true
+  enable: false  # Disabled for initial testing
 
   # Model file
   model: "data/models/bias_predictor.onnx"
 
   # Runtime configuration
   runtime:
-    provider: "cpu"  # cpu, cuda, tensorrt
+    provider: "cpu"
     num_threads: 2
     optimization_level: 3
-
-  # Input configuration
-  input:
-    window_size: 1000  # samples (10 seconds at 100Hz)
-    features: ["ax", "ay", "az", "gx", "gy", "gz", "temp"]
-
-  # Output configuration
-  output:
-    predict_accel_bias: true
-    predict_gyro_bias: true
-    mc_dropout_samples: 10
-
-  # OOD detection
-  ood_detection:
-    enable: true
-    method: "mahalanobis"
-    threshold: 3.0
-    training_stats: "data/models/training_stats.npz"
-
-  # Robust ingestion
-  robust_ingestion:
-    aleatoric_scale: 1.0
-    epistemic_scale: 2.0
-    drift_guard: true
-    max_step_sigma: 3.0
-    smoothing_alpha: 0.1
 
 # Debug and Analysis
 debug:
@@ -278,7 +241,7 @@ debug:
 
   # Visualization
   visualization:
-    enable: true
+    enable: false  # Disabled for performance
     update_rate_hz: 1
     trajectory_plot: true
     error_plot: true
@@ -290,12 +253,12 @@ debug:
     save_trajectory: true
     save_errors: true
     save_covariance: true
-    save_innovations: true
-    save_nees: true
+    save_innovations: false
+    save_nees: false
 
   # Real-time monitoring
   monitoring:
     print_errors: true
-    error_frequency: 100  # Print every N iterations
+    error_frequency: 1000  # Print every 10 seconds
     warn_on_divergence: true
     max_position_error_m: 1000.0
