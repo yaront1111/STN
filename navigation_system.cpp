@@ -45,7 +45,7 @@ private:
     // Core components (no mocks - all real implementations)
     std::unique_ptr<HierarchicalFilter> filter_;
     std::unique_ptr<SensorManager> sensors_;
-    std::unique_ptr<CompositeMapManager> maps_;
+    std::shared_ptr<CompositeMapManager> maps_;
     std::unique_ptr<ONNXPredictor> ml_predictor_;
     std::unique_ptr<DataValidator> validator_;
     std::unique_ptr<PerformanceMonitor> perf_monitor_;
@@ -126,7 +126,7 @@ public:
 
         // 3. Load real map data
         LOG_INFO("Loading map data (XGM2019e gravity, SRTM terrain)...");
-        maps_ = std::make_unique<CompositeMapManager>(config_["maps"]);
+        maps_ = std::make_shared<CompositeMapManager>(config_["maps"]);
 
         // Initialize maps first
         if (!maps_->initialize()) {
@@ -148,8 +148,8 @@ public:
             );
 
             if (!ml_predictor_->loadModel()) {
-                LOG_ERROR("Failed to load ML model");
-                throw std::runtime_error("ML model loading failed");
+                LOG_WARN("Failed to load ML model - continuing without ML bias prediction");
+                ml_predictor_.reset();  // Clear the predictor
             }
         }
 
@@ -158,7 +158,7 @@ public:
         filter_ = std::make_unique<HierarchicalFilter>(
             config_["ukf"],
             config_["rbpf"],
-            maps_.get()
+            maps_
         );
 
         // 6. Initialize performance monitor
@@ -397,8 +397,35 @@ public:
 
         // 7. Log everything
         Logger::getInstance().logState(current_state_);
-        // TODO: Convert SensorPacket to LoggedSensorData
-        // Logger::getInstance().logMeasurements(sensor_data);
+
+        // Convert SensorPacket to LoggedSensorData
+        LoggedSensorData logged_data;
+        logged_data.timestamp = sensor_data.timestamp;
+        logged_data.dt = sensor_data.dt;
+
+        // IMU data
+        logged_data.imu.accel = sensor_data.imu.accel;
+        logged_data.imu.gyro = sensor_data.imu.gyro;
+        logged_data.imu.temperature = sensor_data.imu.temperature;
+
+        // Barometer data
+        logged_data.barometer.pressure = sensor_data.barometer.pressure;
+        logged_data.barometer.temperature = sensor_data.barometer.temperature;
+        logged_data.barometer.altitude = sensor_data.barometer.altitude;
+        logged_data.has_baro = sensor_data.has_baro;
+
+        // Magnetometer data
+        logged_data.magnetometer.field = sensor_data.magnetometer.field;
+        logged_data.magnetometer.declination = sensor_data.magnetometer.declination;
+        logged_data.magnetometer.inclination = sensor_data.magnetometer.inclination;
+        logged_data.has_mag = sensor_data.has_mag;
+
+        // Gradiometer data
+        logged_data.gradiometer.gradient_tensor = sensor_data.gradiometer.tensor.head<5>();
+        logged_data.gradiometer.confidence = sensor_data.gradiometer.confidence;
+        logged_data.has_gravity = sensor_data.has_grad;
+
+        Logger::getInstance().logMeasurements(logged_data);
         Logger::getInstance().logCovariance(filter_->getCovariance());
 
         // 8. Real-time analysis (if enabled)

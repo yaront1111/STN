@@ -182,10 +182,8 @@ public:
             target->flush();  // Ensure data is written immediately
         }
 
-        // Also write to console for INFO and above
-        if (level >= LogLevel::INFO) {
-            std::cout << ss.str() << std::endl;
-        }
+        // Always write to console for all log levels
+        std::cout << ss.str() << std::endl;
 
         total_logs_++;
     }

@@ -228,23 +228,71 @@ bool TrajectoryAnalyzer::loadGroundTruth(const std::string& filename) {
     // Skip header
     std::getline(file, line);
 
+    // Check if this is lat/lon format or NED format
+    bool is_geodetic = line.find("lat") != std::string::npos;
+
+    // Reference point for geodetic conversion (first point)
+    double ref_lat = 0, ref_lon = 0;
+    bool ref_set = false;
+
     int count = 0;
     while (std::getline(file, line)) {
         std::stringstream ss(line);
         GroundTruth truth;
 
-        // Parse CSV: timestamp,x,y,z,vx,vy,vz,roll,pitch,yaw
-        char comma;
         double roll, pitch, yaw;
+        char comma;
 
-        ss >> truth.timestamp >> comma
-           >> truth.position.x() >> comma
-           >> truth.position.y() >> comma
-           >> truth.position.z() >> comma
-           >> truth.velocity.x() >> comma
-           >> truth.velocity.y() >> comma
-           >> truth.velocity.z() >> comma
-           >> roll >> comma >> pitch >> comma >> yaw;
+        if (is_geodetic) {
+            // Parse CSV: timestamp,lat,lon,alt,vn,ve,vd,roll,pitch,yaw
+            double lat, lon, alt;
+            ss >> truth.timestamp >> comma
+               >> lat >> comma
+               >> lon >> comma
+               >> alt >> comma
+               >> truth.velocity.x() >> comma  // vn
+               >> truth.velocity.y() >> comma  // ve
+               >> truth.velocity.z() >> comma  // vd
+               >> roll >> comma >> pitch >> comma >> yaw;
+
+            // Set reference point (first position)
+            if (!ref_set) {
+                ref_lat = lat;
+                ref_lon = lon;
+                ref_set = true;
+                truth.position = Vector3d(0, 0, -alt);  // Initial position at origin, altitude in NED
+            } else {
+                // Convert lat/lon to NED relative to reference
+                const double R_earth = 6378137.0;  // Earth radius in meters
+                double lat_rad = lat * M_PI / 180.0;
+                double ref_lat_rad = ref_lat * M_PI / 180.0;
+
+                // North distance
+                double dn = (lat - ref_lat) * M_PI / 180.0 * R_earth;
+
+                // East distance (accounting for latitude)
+                double de = (lon - ref_lon) * M_PI / 180.0 * R_earth * cos(ref_lat_rad);
+
+                // Down (negative altitude in NED)
+                double dd = -alt;
+
+                truth.position = Vector3d(dn, de, dd);
+            }
+
+            // Velocity is already in NED (vn, ve, vd)
+            // vd is positive down in NED
+
+        } else {
+            // Parse CSV: timestamp,x,y,z,vx,vy,vz,roll,pitch,yaw
+            ss >> truth.timestamp >> comma
+               >> truth.position.x() >> comma
+               >> truth.position.y() >> comma
+               >> truth.position.z() >> comma
+               >> truth.velocity.x() >> comma
+               >> truth.velocity.y() >> comma
+               >> truth.velocity.z() >> comma
+               >> roll >> comma >> pitch >> comma >> yaw;
+        }
 
         // Convert Euler angles to quaternion
         double roll_rad = roll * M_PI / 180.0;

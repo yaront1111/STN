@@ -63,7 +63,7 @@ namespace {
  */
 HierarchicalFilter::HierarchicalFilter(const YAML::Node& ukf_node,
                                        const YAML::Node& rbpf_node,
-                                       MapManager* maps)
+                                       std::shared_ptr<MapManager> maps)
     : maps_(maps),
       perf_monitor_(nullptr),
       current_mode_(FilterMode::UKF_ONLY),
@@ -104,10 +104,9 @@ HierarchicalFilter::HierarchicalFilter(const YAML::Node& ukf_node,
     rbpf_config.num_particles = 100;
     rbpf_ = std::make_unique<RBPF>(rbpf_config);
 
-    // Set maps for RBPF if available (TODO: refactor ownership to shared_ptr)
+    // Set maps for RBPF if available
     if (maps_) {
-        auto* composite_map = dynamic_cast<CompositeMapManager*>(maps_);
-        (void)composite_map;
+        rbpf_->setMaps(maps_);
     }
 
     LOG_INFO("Hierarchical filter initialized from YAML");
@@ -117,7 +116,7 @@ HierarchicalFilter::HierarchicalFilter(const YAML::Node& ukf_node,
  * Hierarchical Filter - Standard Constructor
  */
 HierarchicalFilter::HierarchicalFilter(const HierarchicalConfig& config,
-                                       MapManager* maps,
+                                       std::shared_ptr<MapManager> maps,
                                        PerformanceMonitor* perf)
     : maps_(maps),
       perf_monitor_(perf),
@@ -145,10 +144,9 @@ HierarchicalFilter::HierarchicalFilter(const HierarchicalConfig& config,
     rbpf_config.num_particles = 100;  // Adjust based on performance
     rbpf_ = std::make_unique<RBPF>(rbpf_config);
 
-    // Set maps for RBPF if available (TODO: refactor ownership to shared_ptr)
+    // Set maps for RBPF if available
     if (maps_) {
-        auto* composite_map = dynamic_cast<CompositeMapManager*>(maps_);
-        (void)composite_map;
+        rbpf_->setMaps(maps_);
     }
 
     {
@@ -941,11 +939,38 @@ void MultiHypothesisTracker::addHypothesis(const CombinedState& state, double li
     }
 }
 
-void MultiHypothesisTracker::updateHypotheses(const SensorData& /*measurement*/) {
-    // Placeholder: real implementation should compute likelihood via measurement model
+void MultiHypothesisTracker::updateHypotheses(const SensorData& measurement) {
+    // Compute likelihood for each hypothesis based on innovation
     for (auto& hyp : hypotheses_) {
-        double innovation = 0.0;  // TODO: compute innovation properly
-        hyp.likelihood = std::exp(-innovation * innovation / 2.0);
+        // Compute innovation as the difference between predicted and measured values
+        double innovation = 0.0;
+
+        // Barometer innovation
+        if (measurement.has_baro) {
+            double predicted_altitude = hyp.state.ukf_state.position(2);
+            double measured_altitude = measurement.barometer.altitude;
+            double baro_innovation = measured_altitude - predicted_altitude;
+
+            // Combine innovations (can be extended for other sensors)
+            // Use pressure_variance instead of pressure_noise
+            double pressure_std = std::sqrt(measurement.barometer.pressure_variance);
+            innovation += baro_innovation * baro_innovation / (pressure_std * pressure_std);
+        }
+
+        // Magnetometer innovation
+        if (measurement.has_mag) {
+            // Compute expected magnetic field at hypothesis position
+            // Use the measured field magnitude directly for now
+            double measured_field_magnitude = measurement.magnetometer.field.norm();
+            // Simple innovation based on expected field strength (can be improved with actual field model)
+            double expected_field_magnitude = 50.0;  // Typical Earth field strength in uT
+            double mag_innovation = measured_field_magnitude - expected_field_magnitude;
+
+            innovation += mag_innovation * mag_innovation / (0.1 * 0.1);  // Assume 0.1 uT noise
+        }
+
+        // Compute likelihood using Gaussian probability
+        hyp.likelihood = std::exp(-0.5 * innovation);
         hyp.weight *= hyp.likelihood;
     }
 

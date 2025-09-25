@@ -7,17 +7,17 @@
     <list default="true" id="a3d36c05-f365-4477-8ddd-f7e0cf9b5e25" name="Changes" comment="fixed code">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/config.yaml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/navigation_system.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/navigation_system.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/core/hierarchical_filter.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/hierarchical_filter.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/core/hierarchical_filter.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/hierarchical_filter.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/maps/map_interpolator.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/maps/map_interpolator.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/maps/xgm2019e_map.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/maps/xgm2019e_map.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/barometer_reader.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/barometer_reader.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/core/rbpf/rbpf.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/rbpf/rbpf.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/core/rbpf/rbpf.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/rbpf/rbpf.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/core/ukf/sr_ukf.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/ukf/sr_ukf.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/core/ukf/sr_ukf.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/ukf/sr_ukf.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/sensors/magnetometer_reader.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/magnetometer_reader.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/magnetometer_reader.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/magnetometer_reader.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/utils/data_validator.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/data_validator.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/utils/math_utils.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/math_utils.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/utils/performance_monitor.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/performance_monitor.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/utils/logger.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/logger.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/utils/trajectory_analyzer.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/trajectory_analyzer.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -96,7 +96,7 @@
       <workItem from="1755380588768" duration="64669000" />
       <workItem from="1757009823873" duration="65185000" />
       <workItem from="1758358014674" duration="199000" />
-      <workItem from="1758358525336" duration="68334000" />
+      <workItem from="1758358525336" duration="85725000" />
     </task>
     <task id="LOCAL-00001" summary="test">
       <option name="closed" value="true" />
@@ -346,7 +346,15 @@
       <option name="project" value="LOCAL" />
       <updated>1758740199249</updated>
     </task>
-    <option name="localTasksCounter" value="32" />
+    <task id="LOCAL-00032" summary="fixed code">
+      <option name="closed" value="true" />
+      <created>1758742573256</created>
+      <option name="number" value="00032" />
+      <option name="presentableId" value="LOCAL-00032" />
+      <option name="project" value="LOCAL" />
+      <updated>1758742573256</updated>
+    </task>
+    <option name="localTasksCounter" value="33" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

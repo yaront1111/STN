@@ -346,7 +346,7 @@ bool MagnetometerReader::validateData(MagnetometerData& data) {
     const double n = data.field.norm();
     if (n < min_field_T_ || n > max_field_T_) {
         std::stringstream msg;
-        msg << "Magnetic field out of range: " << (n * 1e6) << " uT. Valid range: ["
+        msg << "Magnetic field out of range: " << (n * 1e6) << " μT. Valid range: ["
             << config_.min_field << ", " << config_.max_field << "] uT";
         LOG_WARN(msg.str());
         data.valid = false;

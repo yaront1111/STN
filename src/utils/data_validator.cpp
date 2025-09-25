@@ -242,7 +242,8 @@ ValidationResult DataValidator::validateSensorData(const SensorData& data) {
 
 ValidationResult DataValidator::validateIMU(const IMUData& imu) {
     ValidationResult result;
-    
+    stats_.total_checks++;
+
     // Check finite
     if (!checkFinite(imu.accel) || !checkFinite(imu.gyro)) {
         setFailure(result, "IMU contains NaN or Inf");
@@ -362,6 +363,15 @@ ValidationResult DataValidator::validateMagnetometer(const MagnetometerData& mag
     
     // Check field strength
     double field_norm = mag.field.norm();
+
+    // Check for zero field (sensor failure)
+    if (field_norm < 1e-9) {  // Less than 1 nT is essentially zero
+        setFailure(result, "Magnetic field is zero (sensor failure)");
+        result.range_valid = false;
+        stats_.range_failures++;
+        return result;
+    }
+
     if (field_norm > config_.max_mag_field) {
         setFailure(result, "Magnetic field too strong: " + std::to_string(field_norm * 1e6) + " µT");
         result.range_valid = false;

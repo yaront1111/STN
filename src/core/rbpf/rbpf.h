@@ -170,6 +170,7 @@ public:
     // Set map managers
     void setGravityMap(std::shared_ptr<GravityMapManager> map) { gravity_map_ = map; }
     void setTerrainMap(std::shared_ptr<TerrainMapManager> map) { terrain_map_ = map; }
+    void setMaps(std::shared_ptr<MapManager> maps);
     
     // Main filter functions
     void predict(const Vector3d& accel, const Vector3d& gyro, double dt);

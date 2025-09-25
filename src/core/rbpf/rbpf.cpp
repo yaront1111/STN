@@ -14,6 +14,7 @@
 #include "../../utils/logger.h"
 #include "../../maps/xgm2019e_map.h"
 #include "../../maps/srtm_terrain.h"
+#include "../../maps/composite_map_manager.h"
 
 namespace Navigation {
 
@@ -110,6 +111,19 @@ RBPF::RBPF(const YAML::Node& config)
 }
 
 RBPF::~RBPF() = default;
+
+void RBPF::setMaps(std::shared_ptr<MapManager> maps) {
+    if (!maps) return;
+
+    // Try to cast to CompositeMapManager to get individual maps
+    if (dynamic_cast<CompositeMapManager*>(maps.get())) {
+        // Create shared_ptrs from raw pointers (be careful with ownership)
+        // Since CompositeMapManager owns these with unique_ptr, we can't directly share
+        // Instead, we'll need to modify CompositeMapManager or use a different approach
+        // For now, we'll leave the maps unset if they're not already shared_ptr
+        LOG_INFO("RBPF: Maps provided but cannot extract gravity/terrain components");
+    }
+}
 
 void RBPF::initialize(const StateVector& initial_state, const MatrixXd& initial_cov) {
     initializeParticles(initial_state, initial_cov);

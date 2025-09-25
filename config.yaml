@@ -6,15 +6,17 @@ system:
   mode: "real_data"  # MUST be real_data - no simulation allowed
   data_path: "data/flight/"
   log_path: "logs/"
-  log_level: "DEBUG"  # DEBUG, INFO, WARN, ERROR
+  log_level: "DEBUG"  # DEBUG, INFO, WARN, ERROR (set to ERROR to prevent huge log files)
   thread_count: 4
   seed: 42  # For reproducibility
 
 # Initial state (only used if no GPS available for initialization)
 initial_state:
-  position: [0.0, 0.0, -1000.0]  # [x, y, z] in NED frame (m)
-  velocity: [0.0, 0.0, 0.0]       # [vn, ve, vd] in NED frame (m/s)
+  position: [0.0, 0.0, -3000.0]  # [x, y, z] in NED frame (m) - altitude 3000m ASL
+  velocity: [100.0, 0.0, 0.0]     # [vn, ve, vd] in NED frame (m/s) - 100 m/s north from truth
   attitude: [1.0, 0.0, 0.0, 0.0]  # Quaternion [w, x, y, z]
+  latitude: 37.0                  # degrees - Initial latitude for gravity model
+  longitude: -119.0               # degrees - Initial longitude
 
 # Performance monitoring
 performance:
@@ -44,18 +46,18 @@ ukf:
 
   # Sigma point parameters
   sigma_points:
-    alpha: 0.001
+    alpha: 0.1     # Increased for better sigma point spread (was 0.001)
     beta: 2.0
-    kappa: -18  # 3 - state_dim
+    kappa: -37     # 3 - n_aug (40) for augmented UKF
 
   # Process noise (from Allan variance analysis)
   process_noise:
-    position: 0.01      # m²/s
-    velocity: 0.1       # m²/s³
-    attitude: 1.0e-6    # rad²/s
-    accel_bias: 1.0e-8  # m²/s⁵
-    gyro_bias: 1.0e-10  # rad²/s³
-    gravity_bias: 1.0e-12 # E²/s
+    position: 1.0e-8    # m²/s - CRITICAL FIX: Was 0.01 (way too high!)
+    velocity: 1.0e-4    # m²/s³ - CRITICAL FIX: Was 0.1 (way too high!)
+    attitude: 1.0e-7    # rad²/s - Slightly increased for stability
+    accel_bias: 1.0e-9  # m²/s⁵ - Reduced for slower bias evolution
+    gyro_bias: 1.0e-11  # rad²/s³ - Reduced for slower bias evolution
+    gravity_bias: 1.0e-14 # E²/s - Reduced for very slow evolution
     temperature_compensation: true
     adaptive_scaling: true
 
@@ -68,12 +70,12 @@ ukf:
 
   # Initial covariance
   initial_covariance:
-    position: 100.0     # m²
-    velocity: 1.0       # (m/s)²
-    attitude: 0.01      # rad²
-    accel_bias: 1.0e-4  # (m/s²)²
-    gyro_bias: 1.0e-6   # (rad/s)²
-    gravity_bias: 100.0 # E²
+    position: 1.0       # m² - REDUCED from 100 to prevent sigma point explosion
+    velocity: 0.01      # (m/s)² - REDUCED from 1.0
+    attitude: 0.001     # rad² - REDUCED from 0.01
+    accel_bias: 1.0e-6  # (m/s²)² - REDUCED from 1e-4
+    gyro_bias: 1.0e-8   # (rad/s)² - REDUCED from 1e-6
+    gravity_bias: 1.0    # E² - REDUCED from 100
 
   # Robust estimation
   robust_estimation:

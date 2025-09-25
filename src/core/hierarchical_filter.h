@@ -88,7 +88,7 @@ private:
     std::unique_ptr<RBPF> rbpf_;
 
     // External interfaces
-    MapManager* maps_;
+    std::shared_ptr<MapManager> maps_;
     PerformanceMonitor* perf_monitor_;
 
     // Configuration
@@ -118,11 +118,11 @@ private:
 
 public:
     HierarchicalFilter(const HierarchicalConfig& config,
-                      MapManager* maps,
+                      std::shared_ptr<MapManager> maps,
                       PerformanceMonitor* perf = nullptr);
     HierarchicalFilter(const YAML::Node& ukf_config,
                       const YAML::Node& rbpf_config,
-                      MapManager* maps);  // YAML constructor
+                      std::shared_ptr<MapManager> maps);  // YAML constructor
     ~HierarchicalFilter() = default;
 
     // Initialize filters with initial state

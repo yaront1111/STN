@@ -111,6 +111,25 @@ if(HAVE_ONNX)
     )
 endif()
 
+# Create a library from source files (excluding main) for reuse in tests
+set(LIB_SOURCES ${SOURCES})
+list(REMOVE_ITEM LIB_SOURCES navigation_system.cpp)
+add_library(navigation_core STATIC ${LIB_SOURCES})
+
+# Configure the library
+target_include_directories(navigation_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${EIGEN3_INCLUDE_DIRS}
+    ${YAMLCPP_INCLUDE_DIRS}
+)
+target_link_libraries(navigation_core
+    Eigen3::Eigen
+    Threads::Threads
+    ${YAMLCPP_LIBRARIES}
+    m
+)
+
 # Create executable
 add_executable(navigation_system ${SOURCES})
 
@@ -162,6 +181,13 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/data/flight)
     file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/data/flight
         DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/data
     )
+endif()
+
+# Enable testing
+option(BUILD_TESTS "Build test suite" ON)
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(test)
 endif()
 
 # Print configuration summary

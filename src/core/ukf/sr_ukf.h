@@ -42,6 +42,12 @@ struct StateVector {
     static constexpr int FULL_DIM = 21;
 };
 
+// Augmented sigma point structure for proper UKF
+struct AugmentedSigma {
+    StateVector x;           // state sigma point
+    Eigen::VectorXd w;      // noise slice (size n_q_)
+};
+
 /**
  * Square-Root UKF Configuration
  */
@@ -51,17 +57,17 @@ struct SRUKFConfig {
     explicit SRUKFConfig(const YAML::Node& config);
 
     // Sigma point parameters
-    double alpha = 0.001;  // Spread of sigma points
+    double alpha = 0.001;  // Spread of sigma points (tuned for n=20 states)
     double beta = 2.0;     // Prior knowledge (2 = Gaussian)
-    double kappa = -18;    // Secondary scaling (3 - n)
+    double kappa = 3 - 20; // Secondary scaling (3-n standard, gives -17)
 
     // Process noise (from config)
-    double q_pos = 0.01;        // Position noise [m²/s]
-    double q_vel = 0.1;         // Velocity noise [m²/s³]
-    double q_att = 1e-6;        // Attitude noise [rad²/s]
-    double q_accel_bias = 1e-8; // Accel bias noise [m²/s⁵]
-    double q_gyro_bias = 1e-10; // Gyro bias noise [rad²/s³]
-    double q_grav_bias = 1e-12; // Gravity bias noise [E²/s]
+    double q_pos = 1.0e-8;      // Position noise [m²/s]
+    double q_vel = 1.0e-4;      // Velocity noise [m²/s³]
+    double q_att = 1.0e-7;      // Attitude noise [rad²/s]
+    double q_accel_bias = 1.0e-9; // Accel bias noise [m²/s⁵]
+    double q_gyro_bias = 1.0e-11; // Gyro bias noise [rad²/s³]
+    double q_grav_bias = 1.0e-14; // Gravity bias noise [E²/s]
 
     // Measurement noise
     double r_baro = 1.0;     // Barometer noise [m²]
@@ -76,13 +82,26 @@ struct SRUKFConfig {
     bool adaptive_q = true;
     bool temperature_compensation = true;
 
-    // Initial uncertainty
-    Vector3d init_pos_std = Vector3d(10, 10, 10);      // [m]
-    Vector3d init_vel_std = Vector3d(1, 1, 1);         // [m/s]
-    Vector3d init_att_std = Vector3d(0.1, 0.1, 0.1);   // [rad]
-    Vector3d init_ab_std = Vector3d(0.01, 0.01, 0.01); // [m/s²]
-    Vector3d init_gb_std = Vector3d(0.001, 0.001, 0.001); // [rad/s]
-    double init_grav_std = 10.0; // [E]
+    // Initial covariance values (loaded from config)
+    double init_pos_cov = 0.01;      // Position covariance [m²] (10cm std)
+    double init_vel_cov = 0.001;     // Velocity covariance [(m/s)²] (3cm/s std)
+    double init_att_cov = 0.0001;    // Attitude covariance [rad²] (0.01 rad std)
+    double init_accel_bias_cov = 1.0e-6;  // Accel bias covariance [(m/s²)²]
+    double init_gyro_bias_cov = 1.0e-8;   // Gyro bias covariance [(rad/s)²]
+    double init_grav_bias_cov = 0.01;     // Gravity bias covariance [E²] (reduced)
+
+    // Initial location (loaded from config)
+    double initial_latitude = 37.0;   // degrees
+    double initial_longitude = -119.0; // degrees
+    double initial_altitude = 3000.0;  // meters ASL
+
+    // Legacy fields for backward compatibility (deprecated)
+    Vector3d init_pos_std = Vector3d(1, 1, 1);      // [m]
+    Vector3d init_vel_std = Vector3d(0.1, 0.1, 0.1);         // [m/s]
+    Vector3d init_att_std = Vector3d(0.032, 0.032, 0.032);   // [rad]
+    Vector3d init_ab_std = Vector3d(0.001, 0.001, 0.001); // [m/s²]
+    Vector3d init_gb_std = Vector3d(0.0001, 0.0001, 0.0001); // [rad/s]
+    double init_grav_std = 1.0; // [E]
 };
 
 /**
@@ -108,7 +127,9 @@ private:
 
     // UKF parameters
     double lambda_;
-    int n_aug_;  // Augmented state dimension
+    int n_x_;    // State dimension (ERROR_DIM = 20)
+    int n_q_;    // Process noise dimension (20)
+    int n_aug_;  // Augmented state dimension (n_x_ + n_q_ = 40)
 
     // Earth model and mechanization
     std::unique_ptr<EarthModel> earth_model_;
@@ -200,12 +221,17 @@ public:
 
 private:
     // Sigma point generation
-    void generateSigmaPoints();
+    void generateSigmaPoints();  // Legacy - to be removed
+    void generateAugmentedSigmaPoints(const Vector3d& accel_input, double dt,
+                                     std::vector<AugmentedSigma>& aug_sigmas);
     std::vector<VectorXd> generateSigmaPointsError(const VectorXd& mean, const MatrixXd& S);
 
     // Process model
     StateVector processModel(const StateVector& state, const Vector3d& accel,
                             const Vector3d& gyro, double dt);
+    StateVector processModelAugmented(const StateVector& x, const Vector3d& accel_meas,
+                                     const Vector3d& gyro_meas, double dt,
+                                     const VectorXd& w);
 
     // Measurement models
     double barometerModel(const StateVector& state);
