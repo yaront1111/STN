@@ -1,2 +1,0 @@
-timestamp,dimension,trace,condition_number,min_eigenvalue,max_eigenvalue,pos_variance,vel_variance,att_variance
-0.001000000,20,0.083303030,990099.009900991,0.000000010,0.010000000,0.030000000,0.003000000,0.000300000
