@@ -201,7 +201,8 @@ private:
     void propagateParticles(const Vector3d& accel, const Vector3d& gyro, double dt);
     void updateParticleWeights(const Eigen::Matrix<double, 5, 1>& gravity_meas,
                                double terrain_alt);
-    
+    void updateParticleWeightsMapFree(const Eigen::Matrix<double, 5, 1>& gravity_meas);
+
     // Resampling
     void resample();
     void systematicResampling();

@@ -95,9 +95,8 @@ HierarchicalFilter::HierarchicalFilter(const YAML::Node& ukf_node,
 
     LOG_INFO("Initializing Hierarchical Filter from YAML");
 
-    // Initialize SR-UKF
-    SRUKFConfig ukf_config;
-    ukf_ = std::make_unique<SquareRootUKF>(ukf_config);
+    // Initialize SR-UKF with YAML config
+    ukf_ = std::make_unique<SquareRootUKF>(ukf_node);
 
     // Initialize RBPF from config
     RBPFConfig rbpf_config;
@@ -240,6 +239,10 @@ CombinedState HierarchicalFilter::processIMU(const IMUData& imu, double dt) {
         current_state_.covariance.block<3,3>(0,0) = ukf_cov.block<3,3>(0,0);
         current_state_.covariance.block<3,3>(3,3) = ukf_cov.block<3,3>(3,3);
         current_state_.covariance.block<3,3>(6,6) = ukf_cov.block<3,3>(6,6);
+
+        // Update confidence based on position uncertainty
+        double pos_uncertainty = std::sqrt(current_state_.covariance.block<3,3>(0,0).trace());
+        current_state_.confidence = std::exp(-pos_uncertainty / 100.0);  // Exponential decay
     }
 
     current_state_.timestamp = imu.timestamp;
@@ -299,7 +302,14 @@ CombinedState HierarchicalFilter::processMeasurement(const SensorData& data) {
                        data.gradiometer.tensor(4),   // Tzz
                        data.gradiometer.tensor(1),   // Txy
                        data.gradiometer.tensor(2);   // Txz
+
+            LOG_DEBUG("Processing gravity measurement in hierarchical filter: [" +
+                      std::to_string(tensor5(0)) + ", " + std::to_string(tensor5(1)) + ", " +
+                      std::to_string(tensor5(2)) + ", " + std::to_string(tensor5(3)) + ", " +
+                      std::to_string(tensor5(4)) + "]");
+
             rbpf_->updateGravity(tensor5);
+            LOG_DEBUG("RBPF gravity update complete in UKF_RBPF mode");
         }
     }
 
@@ -490,6 +500,14 @@ CombinedState HierarchicalFilter::fuseEstimates(const StateVector& ukf_state,
 }
 
 bool HierarchicalFilter::checkResetConditions() {
+    // Check reset interval first (default 15 seconds)
+    double time_since_last_reset = current_state_.timestamp - last_reset_time_;
+    double min_reset_interval = 15.0;  // Default minimum interval
+    // Could be made configurable through config_.reset_triggers if needed
+    if (time_since_last_reset < min_reset_interval) {
+        return false;  // Too soon since last reset
+    }
+
     // Check multiple reset triggers
     bool should_reset = false;
 
@@ -648,6 +666,9 @@ void HierarchicalFilter::transitionMode(FilterMode new_mode) {
     current_mode_ = new_mode;
     current_state_.mode = new_mode;
 
+    LOG_INFO("Filter mode switched to: " + std::to_string(static_cast<int>(new_mode)) +
+             " (0=UKF_ONLY, 1=UKF_RBPF, 2=DEGRADED)");
+
     // Mode-specific transitions
     switch (new_mode) {
         case FilterMode::UKF_ONLY:
@@ -729,18 +750,41 @@ double HierarchicalFilter::computeNIS(const VectorXd& innovation,
 }
 
 bool HierarchicalFilter::isOutlier(const SensorData& data) {
-    // Simplified outlier detection
+    // More permissive outlier detection for real sensor data
     if (data.has_baro) {
         // Check altitude consistency
         double expected_alt = -current_state_.position.z(); // NED -> altitude
         double measured_alt = data.barometer.altitude;
         double diff = std::abs(expected_alt - measured_alt);
 
-        // Threshold adaptive with current vertical std if available
+        // Increased thresholds for real data with possible initial misalignment
         double vz_std = std::sqrt(std::max(1e-6, current_state_.covariance(2,2)));
-        double thresh = std::max(50.0, 5.0 * vz_std); // at least 50m, else 5-sigma
-        return diff > thresh;
+
+        // More permissive threshold: 200m minimum or 10-sigma (was 50m and 5-sigma)
+        double thresh = std::max(200.0, 10.0 * vz_std);
+
+        if (diff > thresh) {
+            std::stringstream msg;
+            msg << "Barometer outlier: expected=" << expected_alt
+                << "m, measured=" << measured_alt
+                << "m, diff=" << diff
+                << "m, threshold=" << thresh << "m";
+            LOG_DEBUG(msg.str());
+            return true;
+        }
     }
+
+    if (data.has_mag) {
+        // Check magnetometer field magnitude (Earth's field is ~25-65 μT)
+        double field_norm = data.magnetometer.field.norm();
+        if (field_norm < 20e-6 || field_norm > 70e-6) {
+            std::stringstream msg;
+            msg << "Magnetometer outlier: field magnitude=" << field_norm * 1e6 << " μT";
+            LOG_DEBUG(msg.str());
+            return true;
+        }
+    }
+
     return false;
 }
 

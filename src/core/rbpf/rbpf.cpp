@@ -12,6 +12,7 @@
 #include <cmath>
 #include <sstream>
 #include "../../utils/logger.h"
+#include "../../utils/math_utils.h"
 #include "../../maps/xgm2019e_map.h"
 #include "../../maps/srtm_terrain.h"
 #include "../../maps/composite_map_manager.h"
@@ -287,32 +288,35 @@ void RBPF::updateAnalyticalStates(RBParticle& particle, const Vector3d& accel,
 }
 
 void RBPF::updateGravity(const Eigen::Matrix<double, 5, 1>& measurement) {
+    // Map-free gravity update using relative measurements
     if (!gravity_map_) {
-        LOG_WARN("Gravity map not set - skipping gravity update");
-        return;
+        // Use relative gravity gradient for particle weighting
+        updateParticleWeightsMapFree(measurement);
+    } else {
+        // Original map-based update
+        updateParticleWeights(measurement, 0.0);
     }
-    
-    // Update particle weights based on gravity correlation
-    updateParticleWeights(measurement, 0.0);
-    
+
     // Normalize weights
     normalizeWeights();
-    
+
     // Resample if needed
     if (needsResampling()) {
         resample();
     }
-    
+
     // Update statistics
     computeStatistics();
-    
+
     {
         std::stringstream msg;
         msg << "Gravity update complete. Max weight: " << stats_.max_weight
-            << ", Correlation: " << stats_.gravity_correlation;
+            << ", ESS: " << stats_.effective_sample_size;
         LOG_DEBUG(msg.str());
     }
-    logMapCorrelation();
+    if (gravity_map_) {
+        logMapCorrelation();
+    }
 }
 
 void RBPF::updateTerrain(double altitude) {
@@ -347,15 +351,8 @@ void RBPF::updateTerrain(double altitude) {
 }
 
 void RBPF::updateBarometer(double pressure, double temperature) {
-    // Hypsometric formula
-    const double P0 = 101325.0;
-    const double L = -0.0065;
-    const double T0 = 288.15;
-    const double g = 9.80665;
-    const double M = 0.0289644;
-    const double R = 8.31432;
-    
-    double altitude = (T0 / L) * (1.0 - pow(pressure / P0, (R * L) / (g * M)));
+    // Use centralized atmospheric model for consistency
+    double altitude = NavMath::AtmosphericModel::pressureToAltitude(pressure);
     
     // Update particle weights based on altitude consistency
     for (auto& p : particles_) {
@@ -412,6 +409,113 @@ void RBPF::updateParticleWeights(const Eigen::Matrix<double, 5, 1>& gravity_meas
 #else
     std::for_each(particles_.begin(), particles_.end(), compute_weight);
 #endif
+}
+
+void RBPF::updateParticleWeightsMapFree(const Eigen::Matrix<double, 5, 1>& gravity_meas) {
+    // Map-free update using relative gravity measurements
+    // Weight particles based on measurement consistency
+
+    LOG_DEBUG("Map-free gravity update with measurement: [" +
+              std::to_string(gravity_meas(0)) + ", " + std::to_string(gravity_meas(1)) + ", " +
+              std::to_string(gravity_meas(2)) + ", " + std::to_string(gravity_meas(3)) + ", " +
+              std::to_string(gravity_meas(4)) + "]");
+
+    // Store measurement history
+    static std::vector<Eigen::Matrix<double, 5, 1>> measurement_history;
+    measurement_history.push_back(gravity_meas);
+
+    // Need at least 2 measurements for gradient estimation
+    if (measurement_history.size() < 2) {
+        LOG_DEBUG("Insufficient measurement history for map-free update");
+        return;
+    }
+
+    // Keep only recent measurements
+    if (measurement_history.size() > 10) {
+        measurement_history.erase(measurement_history.begin());
+    }
+
+    // Compute measurement statistics
+    Eigen::Matrix<double, 5, 1> mean_gradient = Eigen::Matrix<double, 5, 1>::Zero();
+    for (const auto& m : measurement_history) {
+        mean_gradient += m;
+    }
+    mean_gradient /= measurement_history.size();
+
+    // Compute variance
+    double variance = 0;
+    for (const auto& m : measurement_history) {
+        variance += (m - mean_gradient).squaredNorm();
+    }
+    variance /= measurement_history.size();
+    variance = std::max(variance, 1.0);  // Minimum variance
+
+    LOG_DEBUG("Measurement statistics: mean=[" +
+              std::to_string(mean_gradient(0)) + ", " + std::to_string(mean_gradient(1)) + ", " +
+              std::to_string(mean_gradient(2)) + ", " + std::to_string(mean_gradient(3)) + ", " +
+              std::to_string(mean_gradient(4)) + "], variance=" + std::to_string(variance));
+
+    // Update particle weights based on distance from mean gradient
+    for (auto& p : particles_) {
+        // Add position-based variation to expected gradient
+        // Particles at different positions should expect different gradients
+        Eigen::Matrix<double, 5, 1> expected = mean_gradient;
+
+        // CRITICAL FIX: Much stronger spatial differentiation for map-free operation
+        // Gravity gradients can vary by 0.1-1 E per km, so for 100m particle spread:
+        expected(0) += p.position.x() * 0.01;   // 1 E per 100m in x (increased 10x)
+        expected(1) += p.position.y() * 0.01;   // 1 E per 100m in y (increased 10x)
+        expected(2) += (p.position.x() + p.position.y()) * 0.005;  // Cross terms (increased 10x)
+
+        // Add altitude-dependent variation (gravity decreases with altitude)
+        double altitude = -p.position.z();  // Convert NED to altitude
+        expected(0) += altitude * 0.0001;   // Altitude effect on Txx
+        expected(1) += altitude * 0.0001;   // Altitude effect on Tyy
+
+        // Add some randomness for diversity (helps prevent particle degeneracy)
+        static std::mt19937 rng(42);  // Deterministic for testing
+        std::normal_distribution<double> noise_dist(0.0, 0.1);
+        for (int i = 0; i < 5; ++i) {
+            expected(i) += noise_dist(rng);
+        }
+
+        // Compute likelihood based on current measurement
+        Eigen::Matrix<double, 5, 1> innovation = gravity_meas - expected;
+
+        // CRITICAL FIX: Better variance estimation to prevent numerical issues
+        double effective_variance = std::max(variance + 1.0, 5.0);  // Minimum of 5.0 for stability
+        double mahal_dist = innovation.squaredNorm() / effective_variance;
+
+        // Convert to log likelihood with stronger influence for map-free mode
+        p.gravity_score = -0.5 * mahal_dist;
+
+        // CRITICAL FIX: Stronger weight influence for map-free operation
+        // Need to create more discrimination between particles
+        double weight_influence = 2.0;  // Increased from 0.5 to create stronger differences
+        p.log_weight += p.gravity_score * weight_influence;
+
+        // Apply bounds to prevent extreme weights
+        p.log_weight = std::max(p.log_weight, -50.0);  // Prevent underflow
+        p.log_weight = std::min(p.log_weight, 10.0);   // Prevent overflow
+
+        p.weight = exp(p.log_weight);
+    }
+
+    // Normalize weights and compute statistics for debugging
+    normalizeWeights();
+
+    // Calculate weight variance for debugging
+    auto weights = getParticleWeights();
+    double mean_weight = 1.0 / weights.size();
+    double weight_variance = 0;
+    for (double w : weights) {
+        weight_variance += (w - mean_weight) * (w - mean_weight);
+    }
+    weight_variance /= weights.size();
+
+    LOG_DEBUG("Map-free update complete. Weight variance: " + std::to_string(weight_variance) +
+              ", ESS: " + std::to_string(getEffectiveSampleSize()) +
+              ", Max weight: " + std::to_string(*std::max_element(weights.begin(), weights.end())));
 }
 
 double RBPF::computeGravityLikelihood(const RBParticle& particle,
@@ -752,28 +856,46 @@ std::vector<double> RBPF::getParticleWeights() const {
 }
 
 void RBPF::injectPositionHypothesis(const Vector3d& position, double confidence) {
-    // Replace lowest weight particles with new hypothesis
-    int num_to_inject = static_cast<int>(config_.num_particles * confidence * 0.1);
-    
+    // Inject more particles for higher confidence
+    int num_to_inject = static_cast<int>(config_.num_particles * confidence * 0.5);  // Up to 50% of particles
+    num_to_inject = std::max(num_to_inject, static_cast<int>(config_.num_particles * 0.1));  // At least 10%
+
     // Sort particles by weight
     std::sort(particles_.begin(), particles_.end(),
              [](const RBParticle& a, const RBParticle& b) {
                  return a.weight < b.weight;
              });
-    
-    // Replace lowest weight particles
+
+    // Calculate spread based on confidence (tighter spread for higher confidence)
+    double pos_spread = 50.0 * (1.0 - confidence);  // 0-50m spread
+    double alt_spread = 25.0 * (1.0 - confidence);  // 0-25m altitude spread
+
+    // Replace lowest weight particles and redistribute around hypothesis
     for (int i = 0; i < num_to_inject; ++i) {
-        particles_[i].position = position + Vector3d(normal_dist_(rng_) * 10,
-                                                    normal_dist_(rng_) * 10,
-                                                    normal_dist_(rng_) * 5);
-        particles_[i].weight = 1.0 / config_.num_particles;
+        particles_[i].position = position + Vector3d(normal_dist_(rng_) * pos_spread,
+                                                    normal_dist_(rng_) * pos_spread,
+                                                    normal_dist_(rng_) * alt_spread);
+
+        // Give injected particles higher initial weight based on confidence
+        particles_[i].weight = (1.0 / config_.num_particles) * (1.0 + confidence);
         particles_[i].log_weight = log(particles_[i].weight);
+
+        // Reset particle history
+        particles_[i].position_history.clear();
+        particles_[i].position_history.push_back(particles_[i].position);
     }
-    
+
     normalizeWeights();
+
+    // Force immediate resampling to spread the hypothesis
+    if (confidence > 0.7) {
+        resample();
+    }
+
     {
         std::stringstream msg;
-        msg << "Injected " << num_to_inject << " particles at position " << position.transpose();
+        msg << "Injected " << num_to_inject << " particles at position " << position.transpose()
+            << " with spread " << pos_spread << "m, confidence " << confidence;
         LOG_INFO(msg.str());
     }
 }
