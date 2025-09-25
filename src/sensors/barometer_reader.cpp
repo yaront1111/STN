@@ -3,6 +3,7 @@
  */
 
 #include "barometer_reader.h"
+#include "../utils/math_utils.h"
 #include <sstream>
 #include <cmath>
 #include <algorithm>
@@ -89,7 +90,14 @@ bool BarometerReader::readNext(BarometerData& data) {
             if (validateData(data)) {
                 // Compute altitude if not provided
                 if (config_.col_altitude < 0) {
-                    data.altitude = pressureToAltitude(data.pressure, data.temperature);
+                    data.altitude = NavMath::AtmosphericModel::pressureToAltitude(data.pressure);
+
+                    // Validate altitude bounds (-1000m to 20000m) - very permissive
+                    if (data.altitude < -1000.0 || data.altitude > 20000.0) {
+                        LOG_WARN("Computed altitude out of reasonable range: " + std::to_string(data.altitude) + " m");
+                        data.valid = false;
+                        return false;
+                    }
                 }
                 
                 // Update statistics
@@ -97,7 +105,11 @@ bool BarometerReader::readNext(BarometerData& data) {
                 stats_.valid_samples++;
                 stats_.min_pressure = std::min(stats_.min_pressure, data.pressure);
                 stats_.max_pressure = std::max(stats_.max_pressure, data.pressure);
-                stats_.avg_pressure = (stats_.avg_pressure * (stats_.valid_samples - 1) + data.pressure) / stats_.valid_samples;
+                if (stats_.valid_samples == 1) {
+                    stats_.avg_pressure = data.pressure;
+                } else {
+                    stats_.avg_pressure = (stats_.avg_pressure * (stats_.valid_samples - 1) + data.pressure) / stats_.valid_samples;
+                }
                 stats_.min_altitude = std::min(stats_.min_altitude, data.altitude);
                 stats_.max_altitude = std::max(stats_.max_altitude, data.altitude);
                 
@@ -160,8 +172,11 @@ bool BarometerReader::parseLine(const std::string& line, BarometerData& data) {
         
         if (config_.col_altitude >= 0) {
             data.altitude = std::stod(tokens[config_.col_altitude]);
+        } else {
+            // Calculate altitude from pressure using centralized atmospheric model
+            data.altitude = NavMath::AtmosphericModel::pressureToAltitude(data.pressure);
         }
-        
+
         data.valid = true;
         data.pressure_variance = config_.pressure_noise_std * config_.pressure_noise_std;
         
@@ -230,34 +245,16 @@ bool BarometerReader::validateData(BarometerData& data) {
 }
 
 double BarometerReader::pressureToAltitude(double pressure, double temperature, double sea_level_pressure) {
-    // Hypsometric formula
-    const double L = 0.0065;    // Temperature lapse rate [K/m]
-    const double T0 = 288.15;   // Standard temperature [K]
-    const double g = 9.80665;   // Gravity [m/s²]
-    const double M = 0.0289644; // Molar mass of air [kg/mol]
-    const double R = 8.31432;   // Gas constant [J/(mol·K)]
-    
-    // Use actual temperature if available, otherwise standard
-    double T = (temperature > -273) ? (temperature + 273.15) : T0;
-    
-    // Barometric formula
-    double altitude = (T / L) * (1.0 - pow(pressure / sea_level_pressure, (R * L) / (g * M)));
-    
-    return altitude;
+    // Use centralized atmospheric model for consistency
+    // Temperature parameter is kept for API compatibility but not used
+    // as the centralized model uses ISA standard atmosphere
+    return NavMath::AtmosphericModel::pressureToAltitude(pressure);
 }
 
 double BarometerReader::altitudeToPressure(double altitude, double temperature, double sea_level_pressure) {
-    const double L = 0.0065;
-    const double T0 = 288.15;
-    const double g = 9.80665;
-    const double M = 0.0289644;
-    const double R = 8.31432;
-    
-    double T = (temperature > -273) ? (temperature + 273.15) : T0;
-    
-    double pressure = sea_level_pressure * pow(1.0 - (L * altitude) / T, (g * M) / (R * L));
-    
-    return pressure;
+    // Use centralized atmospheric model for consistency
+    // Temperature and sea_level_pressure parameters kept for API compatibility
+    return NavMath::AtmosphericModel::altitudeToPressure(altitude);
 }
 
 void BarometerReader::printStatistics() const {

@@ -53,8 +53,6 @@ class BarometerReader {
 private:
     BarometerConfig config_;
     std::ifstream file_;
-    std::vector<BarometerData> buffer_;
-    // size_t current_index_ = 0;  // Unused field
     
     // Statistics
     struct Stats {

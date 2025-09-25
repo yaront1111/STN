@@ -160,17 +160,20 @@ bool GradiometerReader::parseLine(const std::string& line, GradiometerData& data
     try {
         data.timestamp = std::stod(tokens[config_.col_timestamp]) * config_.time_scale;
         
-        // Parse 5 independent STF components
-        data.gradient_tensor(0) = std::stod(tokens[config_.col_txx]) * config_.gradient_scale;
-        data.gradient_tensor(1) = std::stod(tokens[config_.col_txy]) * config_.gradient_scale;
-        data.gradient_tensor(2) = std::stod(tokens[config_.col_txz]) * config_.gradient_scale;
-        data.gradient_tensor(3) = std::stod(tokens[config_.col_tyy]) * config_.gradient_scale;
-        data.gradient_tensor(4) = std::stod(tokens[config_.col_tyz]) * config_.gradient_scale;
-        
+        // Parse 5 independent STF components into tensor (we'll compute Tzz later)
+        data.tensor(0) = std::stod(tokens[config_.col_txx]) * config_.gradient_scale;  // Txx
+        data.tensor(3) = std::stod(tokens[config_.col_txy]) * config_.gradient_scale;  // Txy
+        data.tensor(4) = std::stod(tokens[config_.col_txz]) * config_.gradient_scale;  // Txz
+        data.tensor(1) = std::stod(tokens[config_.col_tyy]) * config_.gradient_scale;  // Tyy
+        data.tensor(5) = std::stod(tokens[config_.col_tyz]) * config_.gradient_scale;  // Tyz
+
+        // Compute Tzz from trace-free constraint: Txx + Tyy + Tzz = 0
+        data.tensor(2) = -(data.tensor(0) + data.tensor(1));  // Tzz
+
         // Convert units if needed
         if (!config_.in_eotvos) {
             // Convert from SI (s^-2) to Eötvös
-            data.gradient_tensor *= 1e9;
+            data.tensor *= 1e9;
         }
         
         // Parse optional fields
