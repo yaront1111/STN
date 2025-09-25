@@ -6,13 +6,13 @@ system:
   mode: "real_data"  # MUST be real_data - no simulation allowed
   data_path: "data/flight/"
   log_path: "logs/"
-  log_level: "ERROR"  # DEBUG, INFO, WARN, ERROR (set to ERROR to prevent huge log files)
+  log_level: "INFO"  # DEBUG, INFO, WARN, ERROR (set to ERROR to prevent huge log files)
   thread_count: 4
   seed: 42  # For reproducibility
 
 # Initial state (only used if no GPS available for initialization)
 initial_state:
-  position: [0.0, 0.0, -3000.0]  # [x, y, z] in NED frame (m) - altitude 3000m ASL
+  position: [0.0, 0.0, -2999.0]  # [x, y, z] in NED frame (m) - altitude 2999m ASL (matches barometer data)
   velocity: [100.0, 0.0, 0.0]     # [vn, ve, vd] in NED frame (m/s) - 100 m/s north from truth
   attitude: [1.0, 0.0, 0.0, 0.0]  # Quaternion [w, x, y, z]
   latitude: 37.0                  # degrees - Initial latitude for gravity model
@@ -55,27 +55,27 @@ ukf:
     position: 1.0e-8    # m²/s - CRITICAL FIX: Was 0.01 (way too high!)
     velocity: 1.0e-4    # m²/s³ - CRITICAL FIX: Was 0.1 (way too high!)
     attitude: 1.0e-7    # rad²/s - Slightly increased for stability
-    accel_bias: 1.0e-9  # m²/s⁵ - Reduced for slower bias evolution
-    gyro_bias: 1.0e-11  # rad²/s³ - Reduced for slower bias evolution
+    accel_bias: 1.0e-7  # m²/s⁵ - INCREASED 100x for better bias tracking
+    gyro_bias: 1.0e-9   # rad²/s³ - INCREASED 100x for moderate adaptation
     gravity_bias: 1.0e-14 # E²/s - Reduced for very slow evolution
     temperature_compensation: true
     adaptive_scaling: true
 
   # Measurement noise
   measurement_noise:
-    barometer: 1.0      # m²
-    magnetometer: 0.01  # rad²
-    gravity_gradient: 100.0  # E²
+    barometer: 25.0     # m² - INCREASED for real barometer noise (~5m std dev)
+    magnetometer: 0.1   # rad² - INCREASED for real magnetometer variations
+    gravity_gradient: 500.0  # E² - INCREASED for real gradiometer noise
     ml_bias_base: 1.0e-6  # (m/s²)² and (rad/s)²
 
   # Initial covariance
   initial_covariance:
-    position: 1.0       # m² - REDUCED from 100 to prevent sigma point explosion
-    velocity: 0.01      # (m/s)² - REDUCED from 1.0
-    attitude: 0.001     # rad² - REDUCED from 0.01
-    accel_bias: 1.0e-6  # (m/s²)² - REDUCED from 1e-4
-    gyro_bias: 1.0e-8   # (rad/s)² - REDUCED from 1e-6
-    gravity_bias: 1.0    # E² - REDUCED from 100
+    position: 25.0      # m² - Balanced: allows uncertainty but prevents sigma point explosion
+    velocity: 1.0       # (m/s)² - Moderate initial velocity uncertainty
+    attitude: 0.01      # rad² - Small attitude uncertainty
+    accel_bias: 1.0e-4  # (m/s²)² - Increased for real sensor biases
+    gyro_bias: 1.0e-6   # (rad/s)² - Increased for real sensor biases
+    gravity_bias: 10.0   # E² - Increased for real gravity variations
 
   # Robust estimation
   robust_estimation:
@@ -98,7 +98,7 @@ rbpf:
     min_particles: 500
     max_particles: 5000
 
-  update_interval_s: 1.0  # Update every second for continuous map correction
+  update_interval_s: 5.0  # Update every 5 seconds for map-based corrections
 
   proposal: "ukf_based"  # Use UKF for importance density
 
@@ -111,7 +111,7 @@ rbpf:
   # Resampling configuration
   resampling:
     method: "systematic"
-    threshold: 0.5  # Effective sample size ratio
+    threshold: 0.7  # INCREASED from 0.5 for more aggressive resampling
     roughening:
       enable: true
       adaptive: true
@@ -123,13 +123,13 @@ rbpf:
     calibrated: true
     multimodal_check: true
     hartigan_threshold: 0.05
-    min_confidence: 0.9
-    min_hold_time_s: 10.0
+    min_confidence: 0.7   # FURTHER REDUCED to trigger resets
+    min_hold_time_s: 3.0   # REDUCED for faster response
 
   reset:
     enable: true
-    require_unimodal: true
-    min_interval_s: 60.0
+    require_unimodal: false  # DISABLED to allow resets even with multimodal
+    min_interval_s: 10.0  # REDUCED to reset more frequently when needed
     partial_states: ["position", "velocity", "yaw"]
     nees_upper_guard: 12.8  # chi²(3, 0.999)
     fisher_cond_max: 1.0e6
@@ -236,7 +236,7 @@ maps:
 
 # Machine Learning Configuration
 ml:
-  enable: true
+  enable: false  # DISABLED: No model file found
 
   # Model file
   model: "data/models/bias_predictor.onnx"
@@ -270,8 +270,8 @@ ml:
     aleatoric_scale: 1.0
     epistemic_scale: 2.0
     drift_guard: true
-    max_step_sigma: 3.0
-    smoothing_alpha: 0.1
+    max_step_sigma: 5.0   # INCREASED from 3.0 to accept larger corrections
+    smoothing_alpha: 0.3   # INCREASED from 0.1 for faster bias tracking
 
 # Debug and Analysis
 debug:
