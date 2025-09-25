@@ -18,6 +18,7 @@ set(TEST_SOURCES
     core/ukf/test_edge_cases.cpp
     core/ukf/test_state_vector.cpp
     core/ukf/test_strapdown.cpp
+    core/ukf/test_barometer_integration.cpp
 
     # Performance tests
     performance/test_performance.cpp
@@ -25,13 +26,17 @@ set(TEST_SOURCES
     # Integration tests
     integration/test_integration.cpp
     integration/test_accuracy.cpp
+    integration/test_reset_integration.cpp  # NEW: Reset integration tests
     # integration/test_real_data_accuracy.cpp  # TODO: Fix compilation
 
     # Core RBPF tests
     core/rbpf/test_rbpf.cpp
+    core/rbpf/test_rbpf_enhanced.cpp  # NEW: Enhanced RBPF tests
 
     # Core integration tests
     core/test_hierarchical_filter.cpp
+    core/test_hierarchical_filter_enhanced.cpp  # NEW: Enhanced hierarchical filter tests
+    core/test_navigation_fixes.cpp  # NEW: Tests for navigation fixes
 
     # Utils tests (Priority 2)
     utils/test_math_utils.cpp
@@ -83,11 +88,10 @@ target_link_libraries(navigation_tests
 # Register tests with CTest
 gtest_discover_tests(navigation_tests)
 
-# Create graded test runner executable (exclude test_main.cpp as it has its own main)
-set(GRADED_TEST_SOURCES ${EXISTING_TEST_SOURCES})
-list(REMOVE_ITEM GRADED_TEST_SOURCES test_main.cpp)
-add_executable(graded_tests test_runner_with_grade.cpp ${GRADED_TEST_SOURCES})
+# Create graded test runner executable - dedicated accuracy validation
+add_executable(graded_tests graded_tests.cpp)
 target_include_directories(graded_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/core/ukf
