@@ -144,6 +144,7 @@ private:
     mutable Vector3d cached_gravity_;
     mutable double cached_gravity_height_;
     mutable bool gravity_cache_valid_;
+    mutable int iteration_count_ = 0;
 
     // Statistics tracking
     struct FilterStats {

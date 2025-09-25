@@ -47,10 +47,20 @@ SRUKFConfig::SRUKFConfig(const YAML::Node& config) {
         q_grav_bias = config["q_grav_bias"].as<double>(1e-14);
     }
 
-    // Measurement noise
-    r_baro = config["r_baro"].as<double>(1.0);
-    r_mag = config["r_mag"].as<double>(0.01);
-    r_grav = config["r_grav"].as<double>(100.0);
+    // Measurement noise - read from nested structure
+    if (config["measurement_noise"]) {
+        r_baro = config["measurement_noise"]["barometer"].as<double>(25.0);
+        r_mag = config["measurement_noise"]["magnetometer"].as<double>(0.01);
+        r_grav = config["measurement_noise"]["gravity_gradient"].as<double>(100.0);
+        LOG_INFO("Loaded measurement noise from config: barometer=" + std::to_string(r_baro) +
+                 " mag=" + std::to_string(r_mag) + " grav=" + std::to_string(r_grav));
+    } else {
+        // Fallback for old config format
+        r_baro = config["r_baro"].as<double>(25.0);
+        r_mag = config["r_mag"].as<double>(0.01);
+        r_grav = config["r_grav"].as<double>(100.0);
+        LOG_WARN("Using fallback measurement noise values");
+    }
 
     // Robust estimation
     use_robust = config["use_robust"].as<bool>(true);
@@ -111,18 +121,21 @@ SquareRootUKF::SquareRootUKF(const SRUKFConfig& config)
              ", n_q=" + std::to_string(n_q_) + ", n_aug=" + std::to_string(n_aug_));
 
     // Compute lambda for augmented dimension
-    lambda_ = config_.alpha * config_.alpha * (n_aug_ + config_.kappa) - n_aug_;
+    // Standard UKF formulation: lambda = alpha^2 * (L + kappa) - L
+    // But we need to ensure positive weights
 
-    // Ensure stable weights (center weight must be reasonable)
-    double min_sum = 3.0;  // Minimum value for (n_aug + lambda) to ensure stability
-    if (n_aug_ + lambda_ < min_sum) {
-        double old_lambda = lambda_;
-        lambda_ = min_sum - n_aug_;
-        LOG_INFO("Adjusted lambda from " + std::to_string(old_lambda) +
-                 " to " + std::to_string(lambda_) +
-                 " to ensure stability. n_aug + lambda = " +
-                 std::to_string(n_aug_ + lambda_));
-    }
+    // For large state dimensions, use a different approach
+    // Set lambda to ensure positive weights: w0 > 0 requires lambda > -n_aug
+    // A common choice for high-dimensional systems is lambda = 3 - n_aug
+    // But this gives negative w0 for n_aug > 3
+
+    // Better approach: Use a fixed positive lambda that ensures stability
+    // lambda = 3 works well for most cases and gives w0 = 3/(n_aug + 3) > 0
+    lambda_ = 3.0;  // Fixed positive value for stability
+
+    LOG_INFO("Using fixed lambda = " + std::to_string(lambda_) +
+             " for stability. n_aug = " + std::to_string(n_aug_) +
+             ", n_aug + lambda = " + std::to_string(n_aug_ + lambda_));
     
     // Create earth model and mechanization
     earth_model_ = std::make_unique<EarthModel>();
@@ -225,6 +238,13 @@ void SquareRootUKF::predict(const Vector3d& accel, const Vector3d& gyro, double 
     // Invalidate gravity cache at start of new timestep
     gravity_cache_valid_ = false;
 
+    // Debug check for NaN inputs
+    if (!accel.allFinite() || !gyro.allFinite() || !std::isfinite(dt)) {
+        LOG_ERROR("Invalid inputs to predict: accel=" + std::to_string(accel.norm()) +
+                  " gyro=" + std::to_string(gyro.norm()) + " dt=" + std::to_string(dt));
+        return;
+    }
+
     // Apply coning/sculling compensation
     auto compensated = mechanization_->compensate(accel, gyro, dt);
     Vector3d a_in = compensated.delta_v / dt;
@@ -292,29 +312,73 @@ void SquareRootUKF::predict(const Vector3d& accel, const Vector3d& gyro, double 
         D.col(i - 1) = std::sqrt(sigma_points_.weights_cov[i]) * ei;
     }
 
-    // Householder QR decomposition on D^T
-    Eigen::HouseholderQR<MatrixXd> qr(D.transpose());
-    MatrixXd R = qr.matrixQR().topLeftCorner(n_x_, n_x_).triangularView<Eigen::Upper>();
+    // Check matrix conditioning before QR decomposition
+    double matrix_condition = 1e-6;  // Minimum condition for stability
 
-    // Ensure positive diagonal elements
-    for (int i = 0; i < n_x_; ++i) {
-        if (R(i, i) < 0) {
-            R.row(i) *= -1;  // Flip sign of entire row to maintain upper triangular structure
+    // Check for valid deviations matrix
+    if (!D.allFinite()) {
+        LOG_ERROR("Deviations matrix D contains NaN/Inf! Using identity for stability.");
+        S_ = MatrixXd::Identity(n_x_, n_x_) * 0.1;  // Small but stable covariance
+    } else {
+        // Compute condition number estimate
+        double max_norm = 0, min_norm = 1e12;
+        for (int i = 0; i < D.cols(); ++i) {
+            double col_norm = D.col(i).norm();
+            max_norm = std::max(max_norm, col_norm);
+            min_norm = std::min(min_norm, col_norm);
         }
-        // Also ensure minimum variance to prevent numerical issues
-        if (std::abs(R(i, i)) < 1e-9) {
-            R(i, i) = 1e-9;
+
+        double condition_estimate = (min_norm > 1e-12) ? max_norm / min_norm : 1e12;
+        if (condition_estimate > 1e8) {  // Poorly conditioned
+            LOG_WARN("Poorly conditioned deviations matrix detected. Adding regularization.");
+            // Add small regularization to diagonal
+            MatrixXd DTD = D.transpose() * D;
+            for (int i = 0; i < DTD.rows(); ++i) {
+                DTD(i, i) += 1e-6;
+            }
+            Eigen::LLT<MatrixXd> llt(DTD);
+            if (llt.info() == Eigen::Success) {
+                S_ = llt.matrixL();
+            } else {
+                LOG_ERROR("LLT decomposition failed! Using safe covariance.");
+                S_ = MatrixXd::Identity(n_x_, n_x_) * 0.1;
+            }
+        } else {
+            // Standard QR decomposition
+            Eigen::HouseholderQR<MatrixXd> qr(D.transpose());
+            MatrixXd R = qr.matrixQR().topLeftCorner(n_x_, n_x_).triangularView<Eigen::Upper>();
+
+            // Ensure positive diagonal elements and minimum variance
+            for (int i = 0; i < n_x_; ++i) {
+                if (R(i, i) < 0) {
+                    R.row(i) *= -1;  // Flip sign of entire row to maintain upper triangular structure
+                }
+                // Ensure minimum variance to prevent numerical issues
+                if (std::abs(R(i, i)) < 1e-6) {  // Increased from 1e-9
+                    R(i, i) = 1e-6;
+                    LOG_DEBUG("Increased minimum variance for stability at diagonal " + std::to_string(i));
+                }
+            }
+
+            // Transpose to get lower triangular form (S_ is lower triangular)
+            S_ = R.transpose();
         }
     }
-
-    // Transpose to get lower triangular form (S_ is lower triangular)
-    S_ = R.transpose();
 
     // CRITICAL: Add numerical stability check
     // PRODUCTION FIX: Much tighter limits to prevent explosion
     const double MAX_POSITION_STD = 10.0;   // meters (was 100)
     const double MAX_VELOCITY_STD = 5.0;    // m/s (was 10)
     const double MAX_ATTITUDE_STD = 0.1;    // radians
+
+    // Debug: Log covariance diagonal
+    if (iteration_count_ < 10 || iteration_count_ % 100 == 0) {
+        std::stringstream dbg_ss;
+        dbg_ss << "S_ diagonal after predict: [" << S_(0,0) << ", " << S_(3,3) << ", "
+               << S_(6,6) << ", " << S_(9,9) << ", " << S_(12,12) << "]";
+        LOG_INFO(dbg_ss.str());
+        iteration_count_++;
+    }
 
     // Check for invalid or extreme values
     if (!S_.allFinite() || S_.hasNaN()) {
@@ -394,56 +458,161 @@ void SquareRootUKF::updateBarometer(double pressure, double temperature) {
         return;
     }
 
-    // Predict measurement from state
-    double h_pred = barometerModel(state_);
-    
-    // Hypsometric formula for altitude from pressure
-    const double P0 = 101325.0;  // Standard pressure at sea level
-    const double L = -0.0065;     // Temperature lapse rate
-    const double T0 = 288.15;     // Standard temperature
-    const double g = 9.80665;
-    const double M = 0.0289644;   // Molar mass of air
-    const double R = 8.31432;     // Universal gas constant
-    
-    double altitude = (T0 / L) * (1.0 - pow(pressure / P0, (R * L) / (g * M)));
-    
-    // Innovation
-    double innovation = altitude - h_pred;
+    // Convert pressure to altitude using atmospheric model
+    double z_meas = NavMath::AtmosphericModel::pressureToAltitude(pressure);
 
-    // Debug: Log large innovations
-    if (std::abs(innovation) > 100.0) {
-        std::stringstream msg;
-        msg << "LARGE BARO INNOVATION: " << innovation << " m (predicted: "
-            << h_pred << ", measured: " << altitude << ")";
-        LOG_WARN(msg.str());
+    // PROPER UKF MEASUREMENT UPDATE
+    // Step 1: Generate sigma points from current state
+    generateSigmaPoints();
+
+    // Step 2: Propagate sigma points through measurement model
+    std::vector<double> Z_sig(sigma_points_.num_points);  // Measurement sigma points
+    for (int i = 0; i < sigma_points_.num_points; ++i) {
+        // h(x) = -position.z (altitude = -z in NED)
+        Z_sig[i] = -sigma_points_.points[i].position.z();
     }
-    
-    // Innovation covariance (scalar for barometer)
-    double S_k = S_(2, 2) * S_(2, 2) + config_.r_baro;
-    
-    // Kalman gain
-    VectorXd K = (S_.col(2) * S_(2, 2)) / S_k;
-    
-    // Update state
-    VectorXd state_vec = state_.toVector();
-    state_vec += K * innovation;
-    state_.fromVector(state_vec);
-    
-    // Update square-root covariance
-    VectorXd u = S_.col(2) / sqrt(S_k);
-    S_ = MatrixUtils::choleskyDowndate(S_, u, 1.0);
-    
-    // Compute NIS
-    stats_.last_nis = innovation * innovation / S_k;
-    checkNIS(stats_.last_nis, 1);
-    
-    // Log
-    logInnovation("barometer", VectorXd::Constant(1, innovation), stats_.last_nis);
-    stats_.update_count++;
-    
+
+    // Step 3: Calculate predicted measurement mean
+    double z_pred = 0.0;
+    for (int i = 0; i < sigma_points_.num_points; ++i) {
+        z_pred += sigma_points_.weights_mean[i] * Z_sig[i];
+    }
+
+    // Step 4: Calculate innovation
+    double innovation = z_meas - z_pred;
+
+    // Check for large innovations
+    if (std::abs(innovation) > 500.0) {
+        std::stringstream msg;
+        msg << "Large barometer innovation: " << innovation << " m (predicted: "
+            << z_pred << ", measured: " << z_meas << ")";
+        LOG_WARN(msg.str());
+        // Don't bound - let the filter handle it properly
+    }
+
+    // Step 5: Calculate innovation covariance S
+    double S = 0.0;
+    for (int i = 0; i < sigma_points_.num_points; ++i) {
+        double dz = Z_sig[i] - z_pred;
+        S += sigma_points_.weights_cov[i] * dz * dz;
+    }
+    S += config_.r_baro;  // Add measurement noise
+    S = std::max(0.001, S);  // Ensure positive
+
+    // Step 6: Calculate cross-covariance P_xz
+    VectorXd P_xz = VectorXd::Zero(StateVector::ERROR_DIM);
+
+    for (int i = 0; i < sigma_points_.num_points; ++i) {
+        // State deviation from mean
+        VectorXd dx = stateToErrorState(sigma_points_.points[i]) - stateToErrorState(state_);
+
+        // Measurement deviation from mean
+        double dz = Z_sig[i] - z_pred;
+
+        // Accumulate cross-covariance
+        P_xz += sigma_points_.weights_cov[i] * dx * dz;
+    }
+
+    // Step 7: Calculate Kalman gain
+    VectorXd K = P_xz / S;
+
+    // Debug logging
     {
         std::stringstream msg;
-        msg << "Barometer update. Innovation: " << innovation << " m, NIS: " << stats_.last_nis;
+        msg << "UKF Baro update: z_pred=" << z_pred << ", z_meas=" << z_meas
+            << ", innovation=" << innovation << ", S=" << S
+            << ", K(2)=" << K(2) << ", P_xz(2)=" << P_xz(2);
+        LOG_INFO(msg.str());
+    }
+
+    // Step 8: Update state
+    VectorXd error_update = K * innovation;
+
+    // Check for NaN
+    if (!error_update.allFinite()) {
+        LOG_WARN("NaN detected in barometer update, skipping");
+        return;
+    }
+
+
+    // CRITICAL FIX: Apply incremental update properly
+    // errorStateToState expects absolute error state, but K*innovation is incremental!
+    // Apply the update directly to each component:
+
+    // Update position
+    state_.position += error_update.segment(0, 3);
+
+    // Update velocity
+    state_.velocity += error_update.segment(3, 3);
+
+    // Update quaternion using SO(3) manifold update
+    Vector3d att_error = error_update.segment(6, 3);
+    state_.quaternion = SO3::boxplus(state_.quaternion, att_error);
+
+    // Update biases
+    state_.accel_bias += error_update.segment(9, 3);
+    state_.gyro_bias += error_update.segment(12, 3);
+    state_.gravity_bias += error_update.segment(15, 5);
+
+    // Step 9: Update covariance using Joseph form for numerical stability
+    // P = (I - K*H)*P*(I - K*H)' + K*R*K'
+    // For scalar measurement, this simplifies
+
+    // First, update S_ using rank-1 downdate
+    // Since we have scalar measurement, we can use efficient rank-1 update
+
+    // Normalize the gain for square-root update
+    VectorXd u = P_xz / std::sqrt(S);
+
+    // Check if downdate is valid
+    if (u.norm() < 1.0) {
+        // Use Cholesky rank-1 downdate
+        S_ = MatrixUtils::choleskyDowndate(S_, u, 1.0);
+    } else {
+        // Fallback: recompute full covariance and factorize
+        MatrixXd P = S_ * S_.transpose();
+
+        // Joseph form update
+        MatrixXd I_KH = MatrixXd::Identity(StateVector::ERROR_DIM, StateVector::ERROR_DIM);
+        VectorXd H = VectorXd::Zero(StateVector::ERROR_DIM);
+        H(2) = -1.0;  // Measurement Jacobian: h = -z
+
+        I_KH -= K * H.transpose();
+        P = I_KH * P * I_KH.transpose() + K * config_.r_baro * K.transpose();
+
+        // Ensure symmetry
+        P = (P + P.transpose()) / 2.0;
+
+        // Recompute square root
+        Eigen::LLT<MatrixXd> llt(P);
+        if (llt.info() == Eigen::Success) {
+            S_ = llt.matrixL();
+        } else {
+            LOG_WARN("Cholesky failed, using eigenvalue decomposition");
+            Eigen::SelfAdjointEigenSolver<MatrixXd> es(P);
+            VectorXd eigenvalues = es.eigenvalues();
+            MatrixXd eigenvectors = es.eigenvectors();
+
+            for (int i = 0; i < eigenvalues.size(); ++i) {
+                eigenvalues(i) = std::max(1e-9, eigenvalues(i));
+            }
+
+            S_ = eigenvectors * eigenvalues.array().sqrt().matrix().asDiagonal();
+        }
+    }
+
+    // Step 10: Compute NIS for consistency check
+    stats_.last_nis = innovation * innovation / S;
+    checkNIS(stats_.last_nis, 1);
+
+    // Logging
+    logInnovation("barometer", VectorXd::Constant(1, innovation), stats_.last_nis);
+    stats_.update_count++;
+
+    {
+        std::stringstream msg;
+        msg << "Barometer update complete. Innovation: " << innovation
+            << " m, NIS: " << stats_.last_nis;
         LOG_DEBUG(msg.str());
     }
 }
@@ -832,20 +1001,44 @@ void SquareRootUKF::generateAugmentedSigmaPoints(const Vector3d& accel_input, do
 }
 
 void SquareRootUKF::generateSigmaPoints() {
-    LOG_INFO("=== generateSigmaPoints START ===");
-    LOG_INFO("n_aug: " + std::to_string(n_aug_) + ", lambda: " + std::to_string(lambda_));
-    LOG_INFO("n_aug + lambda: " + std::to_string(n_aug_ + lambda_));
+    // This function generates NON-AUGMENTED sigma points for measurement updates
+    // For prediction, use generateAugmentedSigmaPoints instead
+
+    // CRITICAL FIX: Use n_x (20) not n_aug (40) for measurement updates!
+    // Measurement updates don't need process noise augmentation
+    int num_sigma = 2 * n_x_ + 1;  // 2*20 + 1 = 41 points
+
+    // Resize if needed (first time or if size changed)
+    if (sigma_points_.points.size() != static_cast<size_t>(num_sigma)) {
+        sigma_points_.points.resize(num_sigma);
+        sigma_points_.weights_mean.resize(num_sigma);
+        sigma_points_.weights_cov.resize(num_sigma);
+        sigma_points_.num_points = num_sigma;
+    }
+
+    // Calculate lambda for NON-AUGMENTED case
+    // Using fixed lambda=3 for stability with n_x=20
+    double lambda_meas = 3.0;
+
+    // Calculate weights for NON-AUGMENTED sigma points
+    const double w0_mean = lambda_meas / (n_x_ + lambda_meas);
+    const double w0_cov = w0_mean + (1.0 - config_.alpha * config_.alpha + config_.beta);
+    const double wi = 0.5 / (n_x_ + lambda_meas);
+
+    sigma_points_.weights_mean[0] = w0_mean;
+    sigma_points_.weights_cov[0] = w0_cov;
+    for (int i = 1; i < num_sigma; ++i) {
+        sigma_points_.weights_mean[i] = wi;
+        sigma_points_.weights_cov[i] = wi;
+    }
 
     // Current state as center point
     sigma_points_.points[0] = state_;
-    LOG_INFO("Center point (state) position: " + std::to_string(state_.position.x()) + ", " +
-             std::to_string(state_.position.y()) + ", " + std::to_string(state_.position.z()));
 
     // Check for invalid S_ matrix
     if (!S_.allFinite() || S_.hasNaN()) {
-        LOG_ERROR("S_ matrix contains NaN or Inf values!");
         std::stringstream ss;
-        ss << "S_ diagonal: " << S_.diagonal().transpose();
+        ss << "S_ matrix contains NaN or Inf values! Diag: " << S_.diagonal().head(6).transpose();
         LOG_ERROR(ss.str());
         // Reset to small identity
         S_ = MatrixXd::Identity(StateVector::ERROR_DIM, StateVector::ERROR_DIM) * 0.01;
@@ -860,8 +1053,9 @@ void SquareRootUKF::generateSigmaPoints() {
              std::to_string(S_(8,8)) + ", " + std::to_string(S_(9,9)));
 
     // PRODUCTION FIX: Robust sigma point generation with bounds
-    double scale_factor = sqrt(std::abs(n_aug_ + lambda_));
-    LOG_INFO("Initial scale_factor: " + std::to_string(scale_factor));
+    // For NON-AUGMENTED measurement update, use n_x + lambda_meas
+    // With lambda=3 and n_x=20, we get sqrt(23) ≈ 4.8
+    double scale_factor = sqrt(n_x_ + 3.0);
 
     // Limit scale factor to reasonable range
     const double MAX_SCALE = 10.0;
@@ -903,22 +1097,13 @@ void SquareRootUKF::generateSigmaPoints() {
     max_deviations.segment(12, 3).setConstant(0.01);   // Gyro bias: max 0.01 rad/s
     max_deviations.segment(15, 5).setConstant(10.0);   // Gravity bias
 
-    for (int i = 0; i < StateVector::ERROR_DIM; ++i) {
+    // Generate sigma points - iterate over state dimensions only
+    for (int i = 0; i < n_x_; ++i) {
         VectorXd delta = scaled_S.col(i);
-
-        // DEBUG: Log the raw delta for first few dimensions
-        if (i < 6) {  // Position and velocity dimensions
-            LOG_DEBUG("Sigma point " + std::to_string(i) + " raw delta:");
-            LOG_DEBUG("  Position delta: " + std::to_string(delta(0)) + ", " +
-                      std::to_string(delta(1)) + ", " + std::to_string(delta(2)));
-            LOG_DEBUG("  Velocity delta: " + std::to_string(delta(3)) + ", " +
-                      std::to_string(delta(4)) + ", " + std::to_string(delta(5)));
-            LOG_DEBUG("  Delta norm: " + std::to_string(delta.norm()));
-        }
 
         // Limit each component
         bool clamped = false;
-        for (int j = 0; j < StateVector::ERROR_DIM; ++j) {
+        for (int j = 0; j < n_x_; ++j) {
             if (std::abs(delta(j)) > max_deviations(j)) {
                 if (!clamped && j < 6) {
                     LOG_WARN("Clamping dimension " + std::to_string(j) + " from " +
@@ -932,13 +1117,30 @@ void SquareRootUKF::generateSigmaPoints() {
         // Check for NaN/Inf
         if (!delta.allFinite()) {
             LOG_ERROR("Non-finite sigma point delta at index " + std::to_string(i));
-            delta = VectorXd::Zero(StateVector::ERROR_DIM);
+            delta = VectorXd::Zero(n_x_);
             delta(i) = 0.01;  // Small perturbation in one direction
         }
 
-        // Plus direction
-        LOG_DEBUG("Creating sigma point " + std::to_string(i + 1) + " (plus direction)");
+        // Plus direction with validation
         sigma_points_.points[i + 1] = errorStateToState(delta, state_);
+
+        // Validate generated sigma point
+        if (!sigma_points_.points[i + 1].position.allFinite() ||
+            !sigma_points_.points[i + 1].velocity.allFinite()) {
+            LOG_WARN("Invalid plus sigma point generated at index " + std::to_string(i) + "! Using mean state.");
+            sigma_points_.points[i + 1] = state_;
+        }
+
+        // Check for extreme sigma points
+        if (sigma_points_.points[i + 1].position.norm() > 100000.0) {
+            LOG_WARN("Extreme plus sigma point position detected: " + std::to_string(sigma_points_.points[i + 1].position.norm()));
+            sigma_points_.points[i + 1] = state_;
+        }
+
+        if (sigma_points_.points[i + 1].velocity.norm() > 1000.0) {
+            LOG_WARN("Extreme plus sigma point velocity detected: " + std::to_string(sigma_points_.points[i + 1].velocity.norm()));
+            sigma_points_.points[i + 1] = state_;
+        }
 
         // DEBUG: Log resulting position for first few points
         if (i < 3) {
@@ -948,16 +1150,25 @@ void SquareRootUKF::generateSigmaPoints() {
                       std::to_string(sigma_points_.points[i + 1].position.z()));
         }
 
-        // Minus direction
-        LOG_DEBUG("Creating sigma point " + std::to_string(i + 1 + StateVector::ERROR_DIM) + " (minus direction)");
-        sigma_points_.points[i + 1 + StateVector::ERROR_DIM] = errorStateToState(-delta, state_);
+        // Minus direction with validation
+        sigma_points_.points[i + 1 + n_x_] = errorStateToState(-delta, state_);
 
-        // DEBUG: Log resulting position for first few points
-        if (i < 3) {
-            LOG_DEBUG("Sigma point " + std::to_string(i + 1 + StateVector::ERROR_DIM) + " position: " +
-                      std::to_string(sigma_points_.points[i + 1 + StateVector::ERROR_DIM].position.x()) + ", " +
-                      std::to_string(sigma_points_.points[i + 1 + StateVector::ERROR_DIM].position.y()) + ", " +
-                      std::to_string(sigma_points_.points[i + 1 + StateVector::ERROR_DIM].position.z()));
+        // Validate generated sigma point
+        if (!sigma_points_.points[i + 1 + n_x_].position.allFinite() ||
+            !sigma_points_.points[i + 1 + n_x_].velocity.allFinite()) {
+            LOG_WARN("Invalid minus sigma point generated at index " + std::to_string(i) + "! Using mean state.");
+            sigma_points_.points[i + 1 + n_x_] = state_;
+        }
+
+        // Check for extreme sigma points
+        if (sigma_points_.points[i + 1 + n_x_].position.norm() > 100000.0) {
+            LOG_WARN("Extreme minus sigma point position detected: " + std::to_string(sigma_points_.points[i + 1 + n_x_].position.norm()));
+            sigma_points_.points[i + 1 + n_x_] = state_;
+        }
+
+        if (sigma_points_.points[i + 1 + n_x_].velocity.norm() > 1000.0) {
+            LOG_WARN("Extreme minus sigma point velocity detected: " + std::to_string(sigma_points_.points[i + 1 + n_x_].velocity.norm()));
+            sigma_points_.points[i + 1 + n_x_] = state_;
         }
     }
 }
@@ -997,10 +1208,38 @@ StateVector SquareRootUKF::processModelAugmented(const StateVector& x, const Vec
 
 StateVector SquareRootUKF::processModel(const StateVector& state, const Vector3d& accel,
                                        const Vector3d& gyro, double dt) {
-    // PRODUCTION FIX: Validate inputs first
-    if (!state.position.allFinite() || !state.velocity.allFinite()) {
-        LOG_ERROR("Invalid state in processModel");
-        return state;  // Return unchanged state
+    // PRODUCTION FIX: Validate inputs first with better error recovery
+    if (!state.position.allFinite()) {
+        LOG_ERROR("Position contains NaN/Inf in processModel! Attempting recovery.");
+        StateVector safe_state = state;
+        safe_state.position = Vector3d(0, 0, -3000);  // Reset to safe altitude
+        return safe_state;
+    }
+
+    if (!state.velocity.allFinite()) {
+        LOG_ERROR("Velocity contains NaN/Inf in processModel! Attempting recovery.");
+        StateVector safe_state = state;
+        safe_state.velocity = Vector3d::Zero();  // Stop all motion
+        return safe_state;
+    }
+
+    // Additional validation for other state components
+    if (!state.quaternion.coeffs().allFinite()) {
+        LOG_ERROR("Quaternion contains NaN/Inf in processModel! Resetting attitude.");
+        StateVector safe_state = state;
+        safe_state.quaternion = Quaterniond::Identity();
+        return safe_state;
+    }
+
+    // Extreme position check (> 50km from origin indicates problem)
+    if (state.position.norm() > 50000.0) {
+        std::stringstream msg;
+        msg << "Position exploded to " << state.position.norm() << " meters!";
+        LOG_ERROR(msg.str());
+        StateVector safe_state = state;
+        safe_state.position = Vector3d(0, 0, -3000);  // Reset to safe position
+        safe_state.velocity *= 0.1;  // Reduce velocity significantly
+        return safe_state;
     }
 
     if (!accel.allFinite() || !gyro.allFinite()) {
@@ -1122,7 +1361,9 @@ StateVector SquareRootUKF::processModel(const StateVector& state, const Vector3d
     }
 
     if (new_state.position.norm() > 1e5) {  // 100km max from origin
-        LOG_ERROR("Position exploded to " + std::to_string(new_state.position.norm()) + " meters!");
+        std::stringstream msg;
+        msg << "Position exploded to " << new_state.position.norm() << " meters!";
+        LOG_ERROR(msg.str());
         return state;  // Return unchanged state
     }
 
@@ -1259,13 +1500,27 @@ MatrixXd SquareRootUKF::computeProcessNoise(const Vector3d& accel, double dt) {
         dt = 0.1;  // Cap at 100ms
     }
 
-    // PRODUCTION FIX: Limit process noise to prevent explosion
-    // Position noise - much smaller to prevent drift
-    double q_pos_bounded = std::min(1e-8, config_.q_pos);
+    // PRODUCTION FIX: Adaptive process noise based on filter stability
+    // Check covariance trace for stability indicator
+    double pos_trace = S_.block(0, 0, 3, 3).diagonal().sum();
+    double vel_trace = S_.block(3, 3, 3, 3).diagonal().sum();
+
+    // Scale down noise if covariance is getting large (instability indicator)
+    double stability_factor = 1.0;
+    if (pos_trace > 10.0 || vel_trace > 1.0) {  // High uncertainty = reduce noise
+        stability_factor = 0.1;
+        LOG_DEBUG("Reducing process noise for stability. Pos trace: " + std::to_string(pos_trace) +
+                  ", Vel trace: " + std::to_string(vel_trace));
+    } else if (pos_trace > 1.0 || vel_trace > 0.1) {
+        stability_factor = 0.5;  // Moderate reduction
+    }
+
+    // Position noise - much smaller to prevent drift, with stability scaling
+    double q_pos_bounded = std::min(1e-8, config_.q_pos * stability_factor);
     Q_sqrt.block(0, 0, 3, 3) = Matrix3d::Identity() * sqrt(q_pos_bounded * dt);
 
-    // Velocity noise - also reduced
-    double q_vel_bounded = std::min(1e-4, config_.q_vel);
+    // Velocity noise - also reduced with stability scaling
+    double q_vel_bounded = std::min(1e-4, config_.q_vel * stability_factor);
     Q_sqrt.block(3, 3, 3, 3) = Matrix3d::Identity() * sqrt(q_vel_bounded * dt);
 
     // Attitude noise (adaptive based on angular rate) - bounded
