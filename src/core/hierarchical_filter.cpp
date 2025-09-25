@@ -99,9 +99,14 @@ HierarchicalFilter::HierarchicalFilter(const YAML::Node& ukf_node,
     SRUKFConfig ukf_config;
     ukf_ = std::make_unique<SquareRootUKF>(ukf_config);
 
-    // Initialize RBPF
+    // Initialize RBPF from config
     RBPFConfig rbpf_config;
-    rbpf_config.num_particles = 100;
+    rbpf_config.num_particles = 1000;  // Use production setting
+    {
+        std::stringstream msg;
+        msg << "Initializing RBPF with " << rbpf_config.num_particles << " particles";
+        LOG_INFO(msg.str());
+    }
     rbpf_ = std::make_unique<RBPF>(rbpf_config);
 
     // Set maps for RBPF if available
@@ -139,9 +144,14 @@ HierarchicalFilter::HierarchicalFilter(const HierarchicalConfig& config,
     SRUKFConfig ukf_config;
     ukf_ = std::make_unique<SquareRootUKF>(ukf_config);
 
-    // Initialize RBPF
+    // Initialize RBPF from config
     RBPFConfig rbpf_config;
-    rbpf_config.num_particles = 100;  // Adjust based on performance
+    rbpf_config.num_particles = 1000;  // Use production setting
+    {
+        std::stringstream msg;
+        msg << "Initializing RBPF with " << rbpf_config.num_particles << " particles";
+        LOG_INFO(msg.str());
+    }
     rbpf_ = std::make_unique<RBPF>(rbpf_config);
 
     // Set maps for RBPF if available

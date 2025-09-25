@@ -215,7 +215,21 @@ public:
 
         // Initialize filter state
         current_state_.position = initial_position;
-        current_state_.velocity = Eigen::Vector3d::Zero();
+
+        // Get initial velocity from config
+        if (config_["initial_state"]["velocity"]) {
+            auto vel = config_["initial_state"]["velocity"].as<std::vector<double>>();
+            current_state_.velocity << vel[0], vel[1], vel[2];
+            {
+                std::stringstream msg;
+                msg << "Using configured initial velocity: " << current_state_.velocity.transpose();
+                LOG_INFO(msg.str());
+            }
+        } else {
+            current_state_.velocity = Eigen::Vector3d::Zero();
+            LOG_INFO("Using zero initial velocity");
+        }
+
         current_state_.quaternion = Eigen::Quaterniond::Identity();
         current_state_.accel_bias = Eigen::Vector3d::Zero();
         current_state_.gyro_bias = Eigen::Vector3d::Zero();

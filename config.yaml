@@ -6,7 +6,7 @@ system:
   mode: "real_data"  # MUST be real_data - no simulation allowed
   data_path: "data/flight/"
   log_path: "logs/"
-  log_level: "DEBUG"  # DEBUG, INFO, WARN, ERROR (set to ERROR to prevent huge log files)
+  log_level: "ERROR"  # DEBUG, INFO, WARN, ERROR (set to ERROR to prevent huge log files)
   thread_count: 4
   seed: 42  # For reproducibility
 
@@ -98,7 +98,7 @@ rbpf:
     min_particles: 500
     max_particles: 5000
 
-  update_interval_s: 30.0
+  update_interval_s: 1.0  # Update every second for continuous map correction
 
   proposal: "ukf_based"  # Use UKF for importance density
 

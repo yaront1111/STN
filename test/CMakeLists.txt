@@ -25,6 +25,7 @@ set(TEST_SOURCES
     # Integration tests
     integration/test_integration.cpp
     integration/test_accuracy.cpp
+    integration/test_real_data_accuracy.cpp
 
     # Core RBPF tests
     core/rbpf/test_rbpf.cpp

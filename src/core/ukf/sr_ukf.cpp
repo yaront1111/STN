@@ -1257,7 +1257,7 @@ StateVector SquareRootUKF::errorStateToState(const VectorXd& error, const StateV
               std::to_string(pos_error.y()) + ", " + std::to_string(pos_error.z()) +
               " (norm: " + std::to_string(pos_error.norm()) + ")");
 
-    const double MAX_POS_ERROR = 1.0;  // Max 1m deviation for sigma points
+    const double MAX_POS_ERROR = 100.0;  // Max 100m deviation for sigma points
     if (pos_error.norm() > MAX_POS_ERROR) {
         LOG_WARN("Large position error in sigma point: " + std::to_string(pos_error.norm()));
         pos_error = pos_error.normalized() * MAX_POS_ERROR;
@@ -1272,7 +1272,7 @@ StateVector SquareRootUKF::errorStateToState(const VectorXd& error, const StateV
               std::to_string(vel_error.y()) + ", " + std::to_string(vel_error.z()) +
               " (norm: " + std::to_string(vel_error.norm()) + ")");
 
-    const double MAX_VEL_ERROR = 0.1;  // Max 0.1 m/s deviation for sigma points
+    const double MAX_VEL_ERROR = 10.0;  // Max 10 m/s deviation for sigma points
     if (vel_error.norm() > MAX_VEL_ERROR) {
         LOG_WARN("Large velocity error in sigma point: " + std::to_string(vel_error.norm()));
         vel_error = vel_error.normalized() * MAX_VEL_ERROR;
