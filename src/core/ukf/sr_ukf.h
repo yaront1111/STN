@@ -140,6 +140,11 @@ private:
     double longitude_;
     double height_;
 
+    // Performance optimization - gravity caching
+    mutable Vector3d cached_gravity_;
+    mutable double cached_gravity_height_;
+    mutable bool gravity_cache_valid_;
+
     // Statistics tracking
     struct FilterStats {
         double last_nis = 0;

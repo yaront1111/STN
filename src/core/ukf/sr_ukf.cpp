@@ -11,6 +11,7 @@
 #include <iostream>
 #include <iomanip>
 #include <sstream>
+#include <chrono>
 
 namespace Navigation {
 
@@ -97,7 +98,7 @@ SRUKFConfig::SRUKFConfig(const YAML::Node& config) {
 
 // Constructor
 SquareRootUKF::SquareRootUKF(const SRUKFConfig& config)
-    : config_(config) {
+    : config_(config), cached_gravity_height_(0.0), gravity_cache_valid_(false) {
     
     // Initialize UKF parameters for truly augmented approach
     constexpr int NOISE_DIM = StateVector::ERROR_DIM; // 20 - reuse same size as Q_sqrt
@@ -179,13 +180,7 @@ void SquareRootUKF::initialize(const StateVector& initial_state) {
     init_std.segment(12, 3).setConstant(sqrt(std::max(1e-10, std::min(1e-6, config_.init_gyro_bias_cov))));  // Gyro bias
     init_std.segment(15, 5).setConstant(sqrt(std::max(0.01, std::min(10.0, config_.init_grav_bias_cov))));  // Gravity bias
 
-    LOG_INFO("Initializing UKF covariance with values:");
-    LOG_INFO("  Position std: " + std::to_string(init_std(0)) + " m (actual)");
-    LOG_INFO("  Velocity std: " + std::to_string(init_std(3)) + " m/s (actual)");
-    LOG_INFO("  Attitude std: " + std::to_string(init_std(6)) + " rad (actual)");
-    LOG_INFO("  n_aug: " + std::to_string(n_aug_) + ", lambda: " + std::to_string(lambda_));
-    LOG_INFO("  Scale factor will be: sqrt(" + std::to_string(n_aug_ + lambda_) + ") = " +
-             std::to_string(sqrt(std::abs(n_aug_ + lambda_))));
+    // UKF covariance initialized
     
     S_ = MatrixXd::Zero(StateVector::ERROR_DIM, StateVector::ERROR_DIM);
     for (int i = 0; i < StateVector::ERROR_DIM; ++i) {
@@ -199,12 +194,6 @@ void SquareRootUKF::initialize(const StateVector& initial_state) {
 
     // Validate S_ matrix dimensions and values
     {
-        std::stringstream msg;
-        msg << "S_ matrix initialized. Size: " << S_.rows() << "x" << S_.cols()
-            << ", Position std: [" << S_(0,0) << ", " << S_(1,1) << ", " << S_(2,2) << "]"
-            << ", Velocity std: [" << S_(3,3) << ", " << S_(4,4) << ", " << S_(5,5) << "]"
-            << ", Attitude std: [" << S_(6,6) << ", " << S_(7,7) << ", " << S_(8,8) << "]";
-        LOG_INFO(msg.str());
 
         // Check for any invalid values
         if (!S_.allFinite()) {
@@ -223,57 +212,40 @@ void SquareRootUKF::initialize(const StateVector& initial_state) {
     // Reset statistics
     stats_ = FilterStats();
     
-    {
-        std::stringstream msg;
-        msg << "UKF initialized at position: " << state_.position.transpose();
-        LOG_INFO(msg.str());
-    }
+    // UKF initialized
     logState();
 }
 
 void SquareRootUKF::predict(const Vector3d& accel, const Vector3d& gyro, double dt) {
-    LOG_INFO("=== AUGMENTED UKF PREDICT START ===");
-    LOG_INFO("Input accel: " + std::to_string(accel.x()) + ", " +
-             std::to_string(accel.y()) + ", " + std::to_string(accel.z()));
-    LOG_INFO("Input gyro: " + std::to_string(gyro.x()) + ", " +
-             std::to_string(gyro.y()) + ", " + std::to_string(gyro.z()));
-    LOG_INFO("dt: " + std::to_string(dt));
-    LOG_INFO("Current state position: " + std::to_string(state_.position.x()) + ", " +
-             std::to_string(state_.position.y()) + ", " + std::to_string(state_.position.z()));
-    LOG_INFO("Current state velocity: " + std::to_string(state_.velocity.x()) + ", " +
-             std::to_string(state_.velocity.y()) + ", " + std::to_string(state_.velocity.z()));
+    // Removed verbose logging from hot path (runs at 100Hz)
+
+    // Performance timing
+    auto predict_start = std::chrono::high_resolution_clock::now();
+
+    // Invalidate gravity cache at start of new timestep
+    gravity_cache_valid_ = false;
 
     // Apply coning/sculling compensation
     auto compensated = mechanization_->compensate(accel, gyro, dt);
     Vector3d a_in = compensated.delta_v / dt;
     Vector3d g_in = compensated.delta_theta / dt;
-    LOG_INFO("Compensated accel: " + std::to_string(a_in.x()) + ", " +
-             std::to_string(a_in.y()) + ", " + std::to_string(a_in.z()));
-    LOG_INFO("Compensated gyro: " + std::to_string(g_in.x()) + ", " +
-             std::to_string(g_in.y()) + ", " + std::to_string(g_in.z()));
-
     // 1) Generate augmented sigma points
-    LOG_INFO("Generating augmented sigma points...");
+    auto sigma_start = std::chrono::high_resolution_clock::now();
     std::vector<AugmentedSigma> aug_sigmas;
     generateAugmentedSigmaPoints(a_in, dt, aug_sigmas);
-    LOG_INFO("Generated " + std::to_string(aug_sigmas.size()) + " augmented sigma points");
-
+    auto sigma_end = std::chrono::high_resolution_clock::now();
     // 2) Propagate each sigma point with its noise slice
-    LOG_INFO("Propagating augmented sigma points...");
+    auto prop_start = std::chrono::high_resolution_clock::now();
     std::vector<StateVector> Xsig_pred(sigma_points_.num_points);
+
+    // TODO: This loop could be parallelized with OpenMP for significant speedup
+    // #pragma omp parallel for if(USE_OPENMP)
     for (int i = 0; i < sigma_points_.num_points; ++i) {
         Xsig_pred[i] = processModelAugmented(aug_sigmas[i].x, a_in, g_in, dt, aug_sigmas[i].w);
-
-        if (i < 3) {  // Log first few
-            LOG_DEBUG("Propagated sigma " + std::to_string(i) + " pos: " +
-                      std::to_string(Xsig_pred[i].position.x()) + ", " +
-                      std::to_string(Xsig_pred[i].position.y()) + ", " +
-                      std::to_string(Xsig_pred[i].position.z()));
-        }
     }
+    auto prop_end = std::chrono::high_resolution_clock::now();
     
     // 3) Compute predicted mean on manifold
-    LOG_INFO("Computing predicted mean state from augmented propagation...");
     StateVector x_mean;
     x_mean.position.setZero();
     x_mean.velocity.setZero();
@@ -283,11 +255,7 @@ void SquareRootUKF::predict(const Vector3d& accel, const Vector3d& gyro, double 
 
     // Compute weighted mean for vector states
     LOG_DEBUG("Computing weighted mean...");
-    double weight_sum = 0.0;
-    for (int i = 0; i < sigma_points_.num_points; ++i) {
-        weight_sum += sigma_points_.weights_mean[i];
-    }
-    LOG_INFO("Weight sum check: " + std::to_string(weight_sum) + " (should be 1.0)");
+    // Weight sum should be 1.0
 
     for (int i = 0; i < sigma_points_.num_points; ++i) {
         double wm = sigma_points_.weights_mean[i];
@@ -298,10 +266,7 @@ void SquareRootUKF::predict(const Vector3d& accel, const Vector3d& gyro, double 
         x_mean.gravity_bias += wm * Xsig_pred[i].gravity_bias;
     }
 
-    LOG_INFO("Computed mean position: " + std::to_string(x_mean.position.x()) + ", " +
-             std::to_string(x_mean.position.y()) + ", " + std::to_string(x_mean.position.z()));
-    LOG_INFO("Computed mean velocity: " + std::to_string(x_mean.velocity.x()) + ", " +
-             std::to_string(x_mean.velocity.y()) + ", " + std::to_string(x_mean.velocity.z()));
+    // Mean state computed
     
     // Quaternion mean using eigen decomposition
     Matrix4d Qavg = Matrix4d::Zero();
@@ -380,21 +345,7 @@ void SquareRootUKF::predict(const Vector3d& accel, const Vector3d& gyro, double 
     }
 
     // 5) Update state
-    LOG_INFO("Before state update - current position: " +
-             std::to_string(state_.position.x()) + ", " +
-             std::to_string(state_.position.y()) + ", " +
-             std::to_string(state_.position.z()));
-    LOG_INFO("Mean state position: " +
-             std::to_string(x_mean.position.x()) + ", " +
-             std::to_string(x_mean.position.y()) + ", " +
-             std::to_string(x_mean.position.z()));
-
     state_ = x_mean;
-
-    LOG_INFO("After state update - new position: " +
-             std::to_string(state_.position.x()) + ", " +
-             std::to_string(state_.position.y()) + ", " +
-             std::to_string(state_.position.z()));
 
     // Final validation of state and covariance
     if (!state_.position.allFinite() || state_.position.norm() > 1e6) {
@@ -413,13 +364,18 @@ void SquareRootUKF::predict(const Vector3d& accel, const Vector3d& gyro, double 
     
     // Update location for earth model
     updateLocation();
-    
+
+    // Performance timing
+    auto predict_end = std::chrono::high_resolution_clock::now();
+    auto predict_ms = std::chrono::duration_cast<std::chrono::microseconds>(predict_end - predict_start).count() / 1000.0;
+
+    // Log timing only if it exceeds threshold
+    if (predict_ms > 5.0) {  // More than 5ms is concerning
+        LOG_WARN("UKF predict took " + std::to_string(predict_ms) + " ms");
+    }
+
+    // Prediction complete - removed verbose logging from hot path
     {
-        std::stringstream msg;
-        msg << "Prediction complete. Position: " << state_.position.transpose()
-            << ", Velocity: " << state_.velocity.transpose()
-            << ", Pos Cov Diag: " << S_(0,0) << "," << S_(1,1) << "," << S_(2,2);
-        LOG_INFO(msg.str());  // Changed to INFO for better visibility
 
         // Check for divergence
         if (state_.position.norm() > 1e6) {
@@ -832,20 +788,15 @@ bool SquareRootUKF::checkObservability() const {
 
 void SquareRootUKF::generateAugmentedSigmaPoints(const Vector3d& accel_input, double dt,
                                                  std::vector<AugmentedSigma>& aug_sigmas) {
-    LOG_DEBUG("=== generateAugmentedSigmaPoints START ===");
-    LOG_DEBUG("n_aug: " + std::to_string(n_aug_) + ", lambda: " + std::to_string(lambda_));
-
     // Compute Q_sqrt for this timestep
     MatrixXd Q_sqrt = computeProcessNoise(accel_input, dt); // 20x20
-    LOG_DEBUG("Q_sqrt computed, size: " + std::to_string(Q_sqrt.rows()) + "x" + std::to_string(Q_sqrt.cols()));
 
     // Build augmented square-root matrix S_aug = blkdiag(S_, Q_sqrt)
     MatrixXd S_aug = MatrixXd::Zero(n_aug_, n_aug_);
     S_aug.topLeftCorner(n_x_, n_x_) = S_;         // 20x20 state covariance
     S_aug.bottomRightCorner(n_q_, n_q_) = Q_sqrt; // 20x20 process noise
 
-    LOG_DEBUG("S_aug built, diagonal values - S_[0,0]: " + std::to_string(S_(0,0)) +
-              ", Q_sqrt[0,0]: " + std::to_string(Q_sqrt(0,0)));
+    // S_aug built with state and process noise
 
     // Resize output
     aug_sigmas.resize(sigma_points_.num_points);
@@ -856,7 +807,7 @@ void SquareRootUKF::generateAugmentedSigmaPoints(const Vector3d& accel_input, do
 
     // Compute scale factor
     double scale = std::sqrt(std::abs(n_aug_ + lambda_));
-    LOG_DEBUG("Scale factor: " + std::to_string(scale));
+    // Scale factor computed
 
     // Generate sigma points from augmented covariance
     for (int i = 0; i < n_aug_; ++i) {
@@ -874,13 +825,10 @@ void SquareRootUKF::generateAugmentedSigmaPoints(const Vector3d& accel_input, do
         aug_sigmas[i + 1 + n_aug_].x = errorStateToState(-dx, state_);
         aug_sigmas[i + 1 + n_aug_].w = -w;
 
-        if (i < 3) {  // Log first few for debugging
-            LOG_DEBUG("Sigma " + std::to_string(i+1) + " dx norm: " + std::to_string(dx.norm()) +
-                      ", w norm: " + std::to_string(w.norm()));
-        }
+        // Sigma point generated
     }
 
-    LOG_DEBUG("Generated " + std::to_string(aug_sigmas.size()) + " augmented sigma points");
+    // Augmented sigma points generated
 }
 
 void SquareRootUKF::generateSigmaPoints() {
@@ -1092,10 +1040,21 @@ StateVector SquareRootUKF::processModel(const StateVector& state, const Vector3d
     Matrix3d C_bn = state.quaternion.toRotationMatrix();
     Vector3d accel_nav = C_bn * accel_corrected;
     
-    // PRODUCTION FIX: Robust gravity compensation
+    // PRODUCTION FIX: Robust gravity compensation with caching
     // CRITICAL FIX: Use the current state's height, not the global height_!
     double current_height = -state.position.z();  // Convert NED to height
-    Vector3d gravity = earth_model_->gravityNED(latitude_, current_height);
+
+    // Cache gravity calculation within timestep to avoid redundant computations
+    Vector3d gravity;
+    if (!gravity_cache_valid_ || std::abs(current_height - cached_gravity_height_) > 1.0) {
+        gravity = earth_model_->gravityNED(latitude_, current_height);
+        cached_gravity_ = gravity;
+        cached_gravity_height_ = current_height;
+        gravity_cache_valid_ = true;
+    } else {
+        gravity = cached_gravity_;
+    }
+
     Vector3d coriolis = earth_model_->coriolisAcceleration(state.velocity, latitude_);
 
     // Validate gravity vector
@@ -1116,28 +1075,9 @@ StateVector SquareRootUKF::processModel(const StateVector& state, const Vector3d
     // True acceleration = specific_force + gravity - Coriolis
     // In NED, gravity vector is [0, 0, +g] (positive down)
 
-    // Debug logging for first few calls
-    static int debug_count = 0;
-    if (debug_count++ < 5) {
-        LOG_INFO("ProcessModel Debug:");
-        LOG_INFO("  State position: " + std::to_string(state.position.x()) + ", " +
-                 std::to_string(state.position.y()) + ", " + std::to_string(state.position.z()));
-        LOG_INFO("  Input accel (body): " + std::to_string(accel_corrected.x()) + ", " +
-                 std::to_string(accel_corrected.y()) + ", " + std::to_string(accel_corrected.z()));
-        LOG_INFO("  Accel (nav): " + std::to_string(accel_nav.x()) + ", " +
-                 std::to_string(accel_nav.y()) + ", " + std::to_string(accel_nav.z()));
-        LOG_INFO("  Gravity: " + std::to_string(gravity.x()) + ", " +
-                 std::to_string(gravity.y()) + ", " + std::to_string(gravity.z()));
-        LOG_INFO("  Current height: " + std::to_string(current_height));
-        LOG_INFO("  dt: " + std::to_string(dt));
-    }
+    // Process model computations
 
     accel_nav = accel_nav + gravity - coriolis;
-
-    if (debug_count < 5) {
-        LOG_INFO("  After gravity comp: " + std::to_string(accel_nav.x()) + ", " +
-                 std::to_string(accel_nav.y()) + ", " + std::to_string(accel_nav.z()));
-    }
 
     // PRODUCTION FIX: Strong bounds on total acceleration
     const double MAX_ACCEL = 30.0;  // 3G max total acceleration

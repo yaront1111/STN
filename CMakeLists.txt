@@ -13,7 +13,7 @@ endif()
 
 # Compiler flags
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native -mtune=native")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native -mtune=native -funroll-loops")
 
 # Add safety and warning flags
 add_compile_options(
@@ -34,6 +34,7 @@ endif()
 # Find required packages
 find_package(Threads REQUIRED)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+find_package(OpenMP)
 
 # Find yaml-cpp
 find_package(yaml-cpp REQUIRED)
@@ -129,6 +130,12 @@ target_link_libraries(navigation_core
     ${YAMLCPP_LIBRARIES}
     m
 )
+
+# Add OpenMP if available
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(navigation_core OpenMP::OpenMP_CXX)
+    target_compile_definitions(navigation_core PUBLIC USE_OPENMP)
+endif()
 
 # Create executable
 add_executable(navigation_system ${SOURCES})
