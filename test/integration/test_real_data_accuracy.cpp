@@ -11,7 +11,7 @@
 #include "core/hierarchical_filter.h"
 #include "sensors/sensor_manager.h"
 #include "maps/map_manager.h"
-#include "maps/real_map_manager.h"
+#include "maps/composite_map_manager.h"
 #include "utils/logger.h"
 
 using namespace Navigation;
@@ -42,9 +42,15 @@ protected:
         auto ukf_config = config["ukf"];
         auto rbpf_config = config["rbpf"];
 
-        // Create MapManager (concrete implementation)
-        map_manager = std::make_shared<RealMapManager>();
-        map_manager->initialize();
+        // Create MapManager (use composite implementation)
+        auto map_config = config["maps"];
+        map_manager = std::make_shared<CompositeMapManager>(
+            map_config["gravity"]["data_path"].as<std::string>(),
+            map_config["terrain"]["data_path"].as<std::string>()
+        );
+        if (!map_manager->initialize()) {
+            LOG_WARN("Failed to initialize maps");
+        }
 
         // Initialize sensor manager from config
         sensor_manager = std::make_unique<SensorManager>(config["sensors"]);
