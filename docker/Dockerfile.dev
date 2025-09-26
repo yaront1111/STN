@@ -1,0 +1,90 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Install development dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    vim \
+    gdb \
+    valgrind \
+    clang-format-14 \
+    clang-tidy-14 \
+    ccache \
+    ninja-build \
+    pkg-config \
+    wget \
+    curl \
+    ca-certificates \
+    python3-pip \
+    python3-dev \
+    doxygen \
+    graphviz \
+    libeigen3-dev \
+    libyaml-cpp-dev \
+    libspdlog-dev \
+    libprotobuf-dev \
+    protobuf-compiler \
+    libgrpc++-dev \
+    protobuf-compiler-grpc \
+    libgtest-dev \
+    libgmock-dev \
+    libopencv-dev \
+    libboost-all-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python tools
+RUN pip3 install --break-system-packages \
+    pre-commit \
+    pyyaml \
+    numpy \
+    matplotlib \
+    pandas \
+    scipy \
+    jupyter \
+    pytest \
+    black \
+    pylint \
+    mypy
+
+# Install GTSAM (optional)
+RUN cd /tmp && \
+    git clone https://github.com/borglab/gtsam.git && \
+    cd gtsam && \
+    git checkout 4.2 && \
+    mkdir build && cd build && \
+    cmake -DGTSAM_BUILD_TESTS=OFF \
+          -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+          -DGTSAM_BUILD_UNSTABLE=OFF \
+          -DCMAKE_BUILD_TYPE=Release \
+          .. && \
+    make -j$(nproc) && \
+    make install && \
+    cd / && rm -rf /tmp/gtsam
+
+# Setup ccache
+ENV PATH="/usr/lib/ccache:${PATH}"
+ENV CCACHE_DIR=/ccache
+
+# Create development user
+RUN useradd -m -s /bin/bash aion && \
+    echo "aion:aion" | chpasswd && \
+    usermod -aG sudo aion
+
+# Create workspace
+RUN mkdir -p /workspace && chown -R aion:aion /workspace
+WORKDIR /workspace
+
+# Switch to non-root user
+USER aion
+
+# Set up development environment
+RUN echo 'alias ll="ls -alF"' >> ~/.bashrc && \
+    echo 'alias la="ls -A"' >> ~/.bashrc && \
+    echo 'alias l="ls -CF"' >> ~/.bashrc && \
+    echo 'export PS1="\[\033[01;32m\]aion@docker\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "' >> ~/.bashrc
+
+CMD ["/bin/bash"]

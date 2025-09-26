@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package aion.msgs;
+
+// IMU sensor data
+message IMUMessage {
+  double timestamp = 1;  // Unix timestamp in seconds
+
+  // Angular velocity [rad/s] in body frame
+  double gyro_x = 2;
+  double gyro_y = 3;
+  double gyro_z = 4;
+
+  // Linear acceleration [m/s^2] in body frame
+  double accel_x = 5;
+  double accel_y = 6;
+  double accel_z = 7;
+
+  double temperature = 8;  // Celsius
+}
+
+// Navigation state
+message StateMessage {
+  double timestamp = 1;  // Unix timestamp in seconds
+
+  // Position in NED [m]
+  double pos_n = 2;
+  double pos_e = 3;
+  double pos_d = 4;
+
+  // Velocity in NED [m/s]
+  double vel_n = 5;
+  double vel_e = 6;
+  double vel_d = 7;
+
+  // Attitude quaternion (NED to body)
+  double quat_w = 8;
+  double quat_x = 9;
+  double quat_y = 10;
+  double quat_z = 11;
+
+  // IMU biases
+  double gyro_bias_x = 12;  // [rad/s]
+  double gyro_bias_y = 13;
+  double gyro_bias_z = 14;
+  double accel_bias_x = 15;  // [m/s^2]
+  double accel_bias_y = 16;
+  double accel_bias_z = 17;
+
+  // Wind estimate [m/s]
+  double wind_n = 18;
+  double wind_e = 19;
+
+  // Diagonal covariance elements (for storage efficiency)
+  repeated double covariance_diagonal = 20;  // 17 elements
+}
+
+// Log file header
+message LogHeader {
+  uint32 version = 1;  // Format version
+  double start_timestamp = 2;  // Session start time
+  string config_hash = 3;  // SHA256 of config file
+  repeated string sensor_list = 4;  // Active sensors
+  string frame_id = 5;  // Reference frame (e.g., "NED")
+
+  // Origin for local coordinates
+  double origin_lat = 6;  // degrees
+  double origin_lon = 7;  // degrees
+  double origin_alt = 8;  // meters
+}
+
+// Generic log frame wrapper
+message LogFrame {
+  enum MessageType {
+    UNKNOWN = 0;
+    HEADER = 1;
+    IMU = 2;
+    STATE = 3;
+    BAROMETER = 4;
+    MAGNETOMETER = 5;
+    RADAR = 6;
+    CAMERA = 7;
+    UWB = 8;
+  }
+
+  double timestamp = 1;  // Frame timestamp
+  MessageType type = 2;  // Message type enum
+  bytes data = 3;  // Serialized message data
+}
+
+// Session statistics (written at end)
+message SessionStats {
+  double duration_s = 1;
+  uint64 total_frames = 2;
+  uint64 imu_count = 3;
+  uint64 state_count = 4;
+  double min_timestamp = 5;
+  double max_timestamp = 6;
+}

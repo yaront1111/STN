@@ -1,0 +1,100 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+out/
+.build/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.code-workspace
+
+# Compiled files
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Debug files
+*.dSYM/
+*.pdb
+core
+vgcore.*
+
+# Logs and data
+logs/
+*.log
+*.bag
+*.bag2
+*.raw
+*.bin
+
+# Generated files
+compile_commands.json
+*.pb.h
+*.pb.cc
+*_pb2.py
+*.grpc.pb.h
+*.grpc.pb.cc
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation
+docs/_build/
+doxygen/
+
+# Data files (keep structure but not content)
+data/dem/**/*.dat
+data/dem/**/*.tif
+data/maps/**/*.dat
+!data/dem/.gitkeep
+!data/maps/.gitkeep
+
+# Calibration results
+configs/calibrations/*.yaml
+!configs/calibrations/example.yaml
+
+# Test outputs
+test_results/
+*.gcov
+*.gcda
+*.gcno
+
+# Package files
+*.deb
+*.rpm
+*.tar.gz
+*.zip
+
+# CUDA
+*.i
+*.ii
+*.gpu
+*.ptx
+*.cubin
+*.fatbin
+
+# Temporary files
+.tmp/
+tmp/
+temp/
+
+# OS specific
+Thumbs.db
+.Spotlight-V100
+.Trashes

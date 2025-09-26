@@ -5,34 +5,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="a3d36c05-f365-4477-8ddd-f7e0cf9b5e25" name="Changes" comment="fixed code">
+      <change afterPath="$PROJECT_DIR$/README.MD" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/code-steps.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/CMakeLists.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/config.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/create_ml_model.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/download_srtm.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/download_xgm2019e.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/generate_flight_data.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/navigation_system.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/navigation_system.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/simple_test.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/ukf/sr_ukf.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/ukf/sr_ukf.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/ukf/sr_ukf.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/ukf/sr_ukf.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/ml/ood_detector.cpp" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/barometer_reader.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/barometer_reader.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/barometer_reader.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/barometer_reader.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/gradiometer_reader.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/gradiometer_reader.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/gradiometer_reader.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/gradiometer_reader.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/imu_reader.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/imu_reader.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/imu_reader.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/imu_reader.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/magnetometer_reader.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/magnetometer_reader.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/magnetometer_reader.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/magnetometer_reader.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/sensor_data.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/sensor_data.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/sensor_manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/sensor_manager.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sensors/sensor_manager.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/sensor_manager.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/utils/math_utils.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/math_utils.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/utils/math_utils.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/math_utils.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/utils/trajectory_analyzer.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/trajectory_analyzer.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/utils/trajectory_analyzer.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/trajectory_analyzer.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/graded_tests.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/test/graded_tests.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -110,7 +85,7 @@
       <workItem from="1755380588768" duration="64669000" />
       <workItem from="1757009823873" duration="65185000" />
       <workItem from="1758358014674" duration="199000" />
-      <workItem from="1758358525336" duration="121041000" />
+      <workItem from="1758358525336" duration="139272000" />
     </task>
     <task id="LOCAL-00001" summary="test">
       <option name="closed" value="true" />
@@ -392,7 +367,15 @@
       <option name="project" value="LOCAL" />
       <updated>1758834518041</updated>
     </task>
-    <option name="localTasksCounter" value="36" />
+    <task id="LOCAL-00036" summary="fixed code">
+      <option name="closed" value="true" />
+      <created>1758887040883</created>
+      <option name="number" value="00036" />
+      <option name="presentableId" value="LOCAL-00036" />
+      <option name="project" value="LOCAL" />
+      <updated>1758887040883</updated>
+    </task>
+    <option name="localTasksCounter" value="37" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

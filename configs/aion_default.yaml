@@ -1,0 +1,136 @@
+# AION Default Configuration
+# All-Weather Integrated Opportunistic Navigation
+
+common:
+  frame: NED
+  origin:
+    lat: 32.0853
+    lon: 34.7818
+    alt_m: 20.0
+  gravity_model: wgs84
+
+ukf:
+  rate_hz: 200
+  proc_noise:
+    gyro_rw: 0.02      # (deg/s)/sqrt(Hz)
+    acc_rw: 0.03       # m/s^2/sqrt(Hz)
+    bg_rw: 0.0005      # deg/s^2/sqrt(Hz)
+    ba_rw: 0.0005      # m/s^3/sqrt(Hz)
+  alpha: 1.0e-3
+  beta: 2.0
+  kappa: 0.0
+
+trn:
+  enabled: true
+  update_rate_hz: 1.0
+  dem_path: data/dem/srtm
+  min_altitude_agl: 50.0       # meters above ground level
+  max_altitude_agl: 5000.0     # meters above ground level
+  measurement_noise_std: 5.0   # radar altimeter noise (m)
+  innovation_gate: 5.0         # innovation gating threshold (sigma)
+  min_slope_deg: 0.5           # minimum terrain slope for updates
+  chi2_gate_1d: 6.63          # chi-squared gate threshold
+  max_innovation_m: 100.0      # maximum innovation allowed (m)
+
+radar_odom:
+  rate_hz: 15
+  robust_loss: huber
+  max_range_m: 120.0
+  min_points: 50
+  enabled: true
+
+vio:
+  type: event            # rgb|event|thermal
+  keyframe_dt: 0.5
+  outlier_chi2: 5.99
+  min_features: 50
+  enabled: false
+
+sop:
+  providers: [leo, terrestrial, 5g]
+  min_fix_rate_hz: 0.2
+  max_dop: 10.0
+  enabled: false
+
+uwb:
+  enabled: false
+  max_range_m: 500.0
+  min_peers: 3
+
+integrity:
+  nees_window_s: 10.0
+  nis_window_s: 10.0
+  consistency_threshold: 0.95
+  min_integrity_score: 0.7
+
+logging:
+  binlog_path: logs/aion.bag
+  summary_json: logs/summary.json
+  level: info            # trace|debug|info|warn|error|critical
+  console_level: info
+  file_level: debug
+
+sensors:
+  imu:
+    rate_hz: 200
+    gyro_noise_density: 0.02      # deg/s/sqrt(Hz)
+    accel_noise_density: 0.03     # m/s^2/sqrt(Hz)
+    gyro_bias_stability: 3.0      # deg/hr
+    accel_bias_stability: 0.05    # m/s^2
+
+  radar:
+    rate_hz: 10
+    max_range_m: 120.0
+    min_range_m: 0.5
+    azimuth_res_deg: 1.0
+    elevation_res_deg: 2.0
+
+  radar_altimeter:
+    rate_hz: 20
+    min_range_m: 2.0
+    max_range_m: 1500.0
+    noise_std_m: 0.5
+
+  camera:
+    rate_hz: 30
+    width: 1280
+    height: 720
+    fov_deg: 90.0
+
+  barometer:
+    rate_hz: 50
+    noise_std_pa: 10.0
+
+  magnetometer:
+    rate_hz: 50
+    noise_std_gauss: 0.1
+
+calibration:
+  imu_to_body:
+    position: [0.0, 0.0, 0.0]      # meters
+    rotation: [0.0, 0.0, 0.0]      # roll, pitch, yaw in degrees
+
+  radar_to_body:
+    position: [0.2, 0.0, -0.1]
+    rotation: [0.0, 0.0, 0.0]
+
+  camera_to_body:
+    position: [0.1, 0.0, -0.05]
+    rotation: [0.0, -15.0, 0.0]    # 15 deg down-looking
+
+modes:
+  nominal:
+    min_sensors: 3
+    required: [imu, radar_odom, trn]
+
+  trn_only:
+    min_sensors: 2
+    required: [imu, trn]
+
+  ro_soop:
+    min_sensors: 3
+    required: [imu, radar_odom, sop]
+
+  degraded:
+    min_sensors: 1
+    required: [imu]
