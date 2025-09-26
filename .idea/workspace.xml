@@ -6,21 +6,33 @@
   <component name="ChangeListManager">
     <list default="true" id="a3d36c05-f365-4477-8ddd-f7e0cf9b5e25" name="Changes" comment="fixed code">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/CMakeLists.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/config.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/config.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/covariance.csv" beforeDir="false" afterPath="$PROJECT_DIR$/covariance.csv" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/create_ml_model.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/download_srtm.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/download_xgm2019e.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/generate_flight_data.cpp" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/navigation_system.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/navigation_system.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/residuals.csv" beforeDir="false" afterPath="$PROJECT_DIR$/residuals.csv" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/hierarchical_filter.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/hierarchical_filter.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/rbpf/rbpf.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/rbpf/rbpf.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/rbpf/rbpf.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/rbpf/rbpf.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/simple_test.cpp" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/src/core/ukf/sr_ukf.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/ukf/sr_ukf.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/core/ukf/sr_ukf.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/ukf/sr_ukf.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/ml/ood_detector.cpp" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/src/sensors/barometer_reader.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/barometer_reader.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/sensors/barometer_reader.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/barometer_reader.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/sensors/gradiometer_reader.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/gradiometer_reader.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/sensors/gradiometer_reader.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/gradiometer_reader.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/sensors/imu_reader.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/imu_reader.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/sensors/imu_reader.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/imu_reader.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/sensors/magnetometer_reader.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/magnetometer_reader.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/sensors/magnetometer_reader.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/magnetometer_reader.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/sensors/sensor_data.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/sensor_data.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/sensors/sensor_manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/sensor_manager.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/sensors/sensor_manager.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/sensors/sensor_manager.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/utils/math_utils.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/math_utils.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/utils/math_utils.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/math_utils.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/state_evolution.csv" beforeDir="false" afterPath="$PROJECT_DIR$/state_evolution.csv" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/test/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/utils/trajectory_analyzer.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/trajectory_analyzer.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/utils/trajectory_analyzer.h" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/trajectory_analyzer.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/graded_tests.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/test/graded_tests.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -54,27 +66,27 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "Python.simple_ui.executor": "Run",
-    "Python.stn_control_center.executor": "Run",
-    "Python.stn_web_ui.executor": "Run",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "Shell Script.run_ui.sh.executor": "Run",
-    "git-widget-placeholder": "main",
-    "last_opened_file_path": "/Users/yarontorgeman/stn-v0.1",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "settings.editor.selected.configurable": "preferences.pluginManager",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python.simple_ui.executor&quot;: &quot;Run&quot;,
+    &quot;Python.stn_control_center.executor&quot;: &quot;Run&quot;,
+    &quot;Python.stn_web_ui.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;Shell Script.run_ui.sh.executor&quot;: &quot;Run&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/yarontorgeman/stn-v0.1&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$" />
@@ -98,7 +110,7 @@
       <workItem from="1755380588768" duration="64669000" />
       <workItem from="1757009823873" duration="65185000" />
       <workItem from="1758358014674" duration="199000" />
-      <workItem from="1758358525336" duration="108740000" />
+      <workItem from="1758358525336" duration="121041000" />
     </task>
     <task id="LOCAL-00001" summary="test">
       <option name="closed" value="true" />
@@ -372,7 +384,15 @@
       <option name="project" value="LOCAL" />
       <updated>1758809968083</updated>
     </task>
-    <option name="localTasksCounter" value="35" />
+    <task id="LOCAL-00035" summary="fixed code">
+      <option name="closed" value="true" />
+      <created>1758834518041</created>
+      <option name="number" value="00035" />
+      <option name="presentableId" value="LOCAL-00035" />
+      <option name="project" value="LOCAL" />
+      <updated>1758834518041</updated>
+    </task>
+    <option name="localTasksCounter" value="36" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
