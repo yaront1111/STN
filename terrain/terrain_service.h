@@ -39,6 +39,9 @@ public:
     // Stats
     size_t getLoadedTileCount() const;
 
+    // Get resolution in degrees per pixel for a coordinate
+    double resolutionDeg(double lat, double lon);
+
 private:
     // Generate tile name from coordinates (SW corner)
     std::string getTileName(double lat, double lon) const;

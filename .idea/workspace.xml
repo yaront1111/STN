@@ -5,9 +5,16 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="a3d36c05-f365-4477-8ddd-f7e0cf9b5e25" name="Changes" comment="fixed code">
-      <change afterPath="$PROJECT_DIR$/README.MD" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/code-steps.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/apps/aion_node.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/apps/aion_node.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/dem/srtm/N31E034.hgt" beforeDir="false" afterPath="$PROJECT_DIR$/data/dem/srtm/N31E034.hgt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/dem/srtm/N31E035.hgt" beforeDir="false" afterPath="$PROJECT_DIR$/data/dem/srtm/N31E035.hgt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/dem/srtm/N32E034.hgt" beforeDir="false" afterPath="$PROJECT_DIR$/data/dem/srtm/N32E034.hgt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/dem/srtm/N32E035.hgt" beforeDir="false" afterPath="$PROJECT_DIR$/data/dem/srtm/N32E035.hgt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/terrain/srtm_reader.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/terrain/srtm_reader.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/terrain/srtm_reader.h" beforeDir="false" afterPath="$PROJECT_DIR$/terrain/srtm_reader.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/terrain/terrain_service.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/terrain/terrain_service.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/terrain/terrain_service.h" beforeDir="false" afterPath="$PROJECT_DIR$/terrain/terrain_service.h" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -85,7 +92,7 @@
       <workItem from="1755380588768" duration="64669000" />
       <workItem from="1757009823873" duration="65185000" />
       <workItem from="1758358014674" duration="199000" />
-      <workItem from="1758358525336" duration="139272000" />
+      <workItem from="1758358525336" duration="141068000" />
     </task>
     <task id="LOCAL-00001" summary="test">
       <option name="closed" value="true" />

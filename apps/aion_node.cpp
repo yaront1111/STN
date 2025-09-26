@@ -176,6 +176,11 @@ int main(int argc, char* argv[]) {
              cfg.min_slope_deg, cfg.chi2_gate_1d, cfg.update_rate_hz);
     LOG_INFO("TRN: origin=({:.6f},{:.6f}) alt={:.1f}m, dem_path='{}'",
              cfg.origin_lat_deg, cfg.origin_lon_deg, cfg.origin_alt_m, cfg.dem_path);
+
+    // Sanity probe: check Jerusalem elevation immediately after init
+    const double jlm_lat = 31.7683, jlm_lon = 35.2137;
+    const double h = trn_manager.terrain()->getElevationBilinear(jlm_lat, jlm_lon);
+    LOG_INFO("TRN: Sanity probe: Jerusalem {:.6f},{:.6f} ⇒ DEM {:.1f} m", jlm_lat, jlm_lon, h);
   }
 
   // Main loop

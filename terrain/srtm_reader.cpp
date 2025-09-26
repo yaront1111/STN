@@ -106,8 +106,17 @@ bool SRTMReader::loadTile(const std::string& filepath) {
     tile_name_ = std::filesystem::path(filepath).filename().string();
     loaded_ = true;
 
+    // Log min/max elevation statistics to detect data issues
+    int16_t minv = INT16_MAX, maxv = INT16_MIN;
+    for (auto h : elevation_data_) {
+        if (h == -32768) continue; // skip voids
+        if (h < minv) minv = h;
+        if (h > maxv) maxv = h;
+    }
+
     LOG_INFO("TRN: Loaded SRTM tile {} ({}x{}) {:.1f}–{:.1f}°lat, {:.1f}–{:.1f}°lon",
              tile_name_, size_, size_, min_lat_, max_lat_, min_lon_, max_lon_);
+    LOG_INFO("TRN: Tile {} elevation stats: min={} m, max={} m", tile_name_, (int)minv, (int)maxv);
     return true;
 }
 

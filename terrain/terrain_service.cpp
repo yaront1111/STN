@@ -142,8 +142,41 @@ Eigen::Vector3d TerrainService::getTerrainNormal(double lat, double lon) {
 }
 
 double TerrainService::getTerrainSlope(double lat, double lon) {
-    const Eigen::Vector2d g = calculateGradient(lat, lon);
-    const double slope_rad = std::atan(g.norm()); // tan(theta) = |grad|
+    // Use tile's native grid step for better slope calculation
+    double h_deg = kGradientStep;
+    if (loadTileIfNeeded(lat, lon)) {
+        if (auto tile = getTileForCoordinate(lat, lon)) {
+            h_deg = std::max(tile->getResolutionDeg(), 1e-5); // Use 1" or 3" native step
+        }
+    }
+
+    // Calculate gradient with native step
+    const double zc = getElevationBilinear(lat, lon);
+    if (zc == -32768.0) return 0.0;
+
+    const double zn = getElevationBilinear(lat + h_deg, lon);
+    const double zs = getElevationBilinear(lat - h_deg, lon);
+    const double ze = getElevationBilinear(lat, lon + h_deg);
+    const double zw = getElevationBilinear(lat, lon - h_deg);
+
+    auto diff = [](double zp, double zm, double z0, double hdeg) -> double {
+        if (zp != -32768.0 && zm != -32768.0) return (zp - zm) / (2.0 * hdeg);
+        if (zp != -32768.0)                    return (zp - z0) / hdeg;
+        if (zm != -32768.0)                    return (z0 - zm) / hdeg;
+        return 0.0;
+    };
+
+    double dlat = diff(zn, zs, zc, h_deg); // meters per degree latitude
+    double dlon = diff(ze, zw, zc, h_deg); // meters per degree longitude
+
+    // Convert to meters per meter
+    constexpr double meters_per_deg_lat = 111111.0;
+    const double meters_per_deg_lon = 111111.0 * std::cos(lat * M_PI / 180.0);
+
+    const double dZ_dN = dlat / meters_per_deg_lat;
+    const double dZ_dE = (meters_per_deg_lon > 1e-9) ? (dlon / meters_per_deg_lon) : 0.0;
+
+    const double slope_rad = std::atan(std::sqrt(dZ_dN*dZ_dN + dZ_dE*dZ_dE));
     return slope_rad * 180.0 / M_PI;
 }
 
@@ -175,6 +208,12 @@ void TerrainService::clearCache() {
 size_t TerrainService::getLoadedTileCount() const {
     std::lock_guard<std::mutex> lock(tiles_mutex_);
     return tiles_.size();
+}
+
+double TerrainService::resolutionDeg(double lat, double lon) {
+    if (!loadTileIfNeeded(lat, lon)) return 0.0;
+    auto tile = getTileForCoordinate(lat, lon);
+    return tile ? tile->getResolutionDeg() : 0.0;
 }
 
 } // namespace terrain

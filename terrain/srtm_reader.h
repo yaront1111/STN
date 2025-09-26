@@ -33,6 +33,9 @@ public:
     // Tile size (1201 for SRTM3, 3601 for SRTM1)
     int getSize() const { return size_; }
 
+    // Resolution in degrees per pixel
+    double getResolutionDeg() const { return loaded_ ? 1.0 / (size_ - 1) : 0.0; }
+
     // Is tile loaded?
     bool isLoaded() const { return loaded_; }
 
@@ -47,6 +50,13 @@ private:
 
     // Continuous indices (fractional row/col for interpolation)
     void getPixelIndicesFrac(double lat, double lon, double& r, double& c) const;
+
+    // Byte swapping helper
+    static inline int16_t swapBytes(int16_t v) {
+        uint16_t u = static_cast<uint16_t>(v);
+        u = static_cast<uint16_t>((u >> 8) | (u << 8));
+        return static_cast<int16_t>(u);
+    }
 
     // Helpers
     static inline bool isVoid(int16_t h) { return h == INT16_MIN; } // -32768
