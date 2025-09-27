@@ -50,10 +50,15 @@ Eigen::VectorXd TRNUKFMeasurement::predict(const State& state) const {
   // Predicted AGL
   const double agl_pred = alt_msl - dem_elev_msl;
 
-  // Update covariance with DEM uncertainty (radar + DEM)
-  const double sigma_dem = estimateDemSigma(lat_deg, lon_deg);
-  // Store updated covariance for later retrieval
-  const_cast<TRNUKFMeasurement*>(this)->R_(0,0) = radar_data_.noise_std * radar_data_.noise_std + sigma_dem * sigma_dem;
+  // Adaptive variance based on terrain slope
+  const double slope_deg = terrain_service_ ? terrain_service_->getTerrainSlope(lat_deg, lon_deg) : 0.0;
+  const double slope_factor = std::max(0.001, slope_deg * slope_deg); // Quadratic improvement with slope
+  const double sigma_dem = params_.dem_sigma_base_m / std::sqrt(0.001 + slope_factor);
+
+  // Adaptive R: radar noise + slope-dependent DEM uncertainty
+  const double r_adaptive = radar_data_.noise_std * radar_data_.noise_std + sigma_dem * sigma_dem;
+  // Clamp between reasonable bounds [0.25, 64.0] (0.5m to 8m sigma)
+  const_cast<TRNUKFMeasurement*>(this)->R_(0,0) = std::min(64.0, std::max(0.25, r_adaptive));
 
   Eigen::VectorXd h(1);
   h(0) = agl_pred;

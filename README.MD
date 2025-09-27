@@ -1,181 +1,135 @@
-# AION — All‑Weather Integrated Opportunistic Navigation (GPS‑Free)
+Here’s a tightened, investor-ready rewrite that keeps **vision optional**, emphasizes **available hardware**, and stays laser-focused on **GPS-denied air/ground/maritime** with a clear path to **≤50 m CEP90** (stretch **10–20 m CEP50** with SoOP/beacons). I’ve also added explicit **modes** for drones and vessels, and kept gravity sensing as an R&D lane (not on the MVP critical path).
 
-> **Purpose**: Deliver reliable **position, navigation, and timing (PNT)** without GNSS in **all weather**, day/night, across air/ground domains. Target **≤50 m CEP90** in most environments; stretch **≤10–20 m CEP50** with beacons/SoOP. Real‑time on embedded compute.
+---
+
+# AION — All-Weather Integrated Opportunistic Navigation (GPS-Free)
+
+> **Mission:** Deliver reliable **position, navigation, and timing (PNT)** without GNSS for **drones, vehicles, and vessels** in contested environments.
+> **Targets:** **≤50 m CEP90** (typical), **10–20 m CEP50** with beacons/SoOP, 100–200 Hz state rate, **all-weather/day-night**.
+> **Why now:** Designed for rapid fielding in Israel and allies; modular, exportable, investable.
 
 ---
 
 ## 0) TL;DR
 
-* **Backbone**: High‑rate **error‑state SR‑UKF** INS.
-* **All‑weather odometry**: **77 GHz radar odometry (RO)** + **TRN** (radar‑altimeter + DEM slope) for absolute clamps.
-* **Absolute fixes**: **Signals of Opportunity (SoOP)** (LEO/Terrestrial/5G) + **cooperative UWB** when available.
-* **Condition‑adaptive**: **Event/thermal VIO** or **LiDAR odometry** when vision helps; auto‑gated.
-* **Integrity & holdover**: RAIM‑like gating, NEES/NIS health, optional **CSAC** timing.
-* **Fusion**: **Fixed‑lag smoother** (factor graph) + **SR‑UKF** soft‑reset reconciliation.
+* **Backbone:** High-rate **error-state SR-UKF INS** with fixed-lag **factor-graph** fusion.
+* **All-weather odometry:** **Radar odometry (RO)** from mmWave/automotive or marine radar.
+* **Absolute clamps:** **TRN** (radar-alt + DEM slope) over land; **SoOP/STN** (LEO/terrestrial/5G/UWB) anywhere signals exist.
+* **Integrity:** RAIM-like gating, **NEES/NIS**, mode manager, and optional **CSAC** time holdover.
+* **Vision is optional:** Event/thermal VIO or LiDAR odometry only when it helps; otherwise off.
 
 ---
 
 ## 1) Value Proposition
 
-* **GPS‑independence** with **graceful degradation**: multiple heterogeneous aids; no single point of failure.
-* **All‑weather, day/night**: radar + TRN don’t care about rain/fog/smoke; event/thermal handle HDR darkness.
-* **Portable & modular**: drop‑in for **small aircraft, UAS, ground robots, mining/ports**.
-* **Product‑ready**: bounded compute/memory, logging, calibration, and integrity metrics for certification path.
+* **GPS-independence with graceful degradation** — multiple heterogeneous aids; no single point of failure.
+* **All-weather, day/night** — radar + TRN/SoOP don’t care about rain, fog, smoke, or darkness.
+* **Air / Ground / Maritime** — one stack, profile-driven modes.
+* **Product-ready foundation** — bounded compute/memory, deterministic timing, binary logs, metrics & integrity outputs.
 
-**Initial Targets**
+**Performance Goals**
 
-* **CEP90 ≤ 50 m** for 30–40 min legs (mixed terrain, 100–1500 m AGL).
-* **CEP50 10–30 m** where SoOP + TRN + VIO are healthy.
-* **Update rate**: 100–200 Hz state, 10–60 Hz aiding.
+* **CEP90 ≤ 50 m** over 30–40 min legs (mixed terrain, 100–1500 m AGL; highways; coastal runs).
+* **CEP50 10–30 m** when TRN+SoOP or beacon geometry is good.
+* **Holdover:** sub-1% drift/km with RO+INS; **time** stable with PPS/PTP (CSAC optional).
 
 ---
 
 ## 2) System Overview
 
 ```
-Sensors (pub)             Front‑Ends                 Fusion Core                 Integrity/Outputs
-┌────────────────┐   ┌─────────────────┐      ┌─────────────────────┐       ┌──────────────────────┐
-│ IMU 200 Hz     ├──▶│ IMU Preintegr.  │──┐   │  SR‑UKF (error‑state)│◀────▶│ Health/Integrity     │
-│ Radar 10–20 Hz │──▶│ Radar Odom (RO) │  │   │  200 Hz mechanization│      │ NEES/NIS/χ² gating   │
-│ RAlt 5–50 Hz   ├──▶│ TRN (DEM+AGL)   │  ├──▶│  Fixed‑Lag Smoother  │──┐   │ Mode/Gating Manager  │
-│ Camera 20–120Hz│──▶│ VIO/Event/Therm │  │   │  (factor graph)      │  │   └─────────┬───────────┘
-│ LiDAR 10–20 Hz │──▶│ LiDAR Odom      │  │   └─────────┬───────────┘  │             │
-│ SoOP 0.1–2 Hz  ├──▶│ SoOP Ranging/T  │  │             │              │     Outputs  │
-│ UWB 1–10 Hz    ├──▶│ Coop. Ranging   │  │       Soft‑reset           │   ┌───────────▼───────────┐
-│ Baro/Mag       └──▶│ Baro/Mag Priors │──┘    reconciliation          └──▶│ PVT, Cov, Integrity    │
-└────────────────┘   └─────────────────┘                                │   │ NMEA, ROS2/gRPC, Log  │
-                                                                       └──▶│ Time (PTP/CSAC)       │
-                                                                           └──────────────────────┘
+Sensors             Front-Ends                      Fusion Core                     Integrity / Outputs
+┌─────────────┐   ┌──────────────────┐        ┌───────────────────────┐        ┌────────────────────────┐
+│ IMU 200 Hz  ├──▶│ IMU Preintegr.   │───┐    │ SR-UKF (200 Hz)       │◀──────▶│ NEES/NIS, χ² gating     │
+│ mmWave/Marine│▶ │ Radar Odom (RO)  │   │    │ Fixed-Lag Smoother    │   ┌───▶│ Mode mgr (NOMINAL/… )   │
+│ Radar 10–20 │   │ TRN (DEM+AGL)    │   ├───▶│ (factor graph 20–60Hz)│   │    └───────────┬───────────┘
+│ RAlt 5–50   │   │ SoOP/STN (TDOA/R)│   │    └─────────┬────────────┘   │                │
+│ SoOP/UWB    │   │ Baro/Mag priors  │───┘        Soft-reset (1–5 Hz)   │        Outputs  │
+│ (opt) VIO/LO│                                            ▲             └────▶ PVT, Cov, Integrity
+└─────────────┘                                            └──────────────▶  Time (PTP/CSAC), Logs
 ```
 
-### Key Concepts
+**Key ideas**
 
-* **Opportunistic fusion**: use any/a subset of aids; each carries its own **covariance & validity**.
-* **Two‑stage fusion**: front‑ends build robust relative/absolute measurements; **fixed‑lag graph** fuses them; **SR‑UKF** runs high‑rate dynamics and is reconciled to the graph at 1–5 Hz via **soft resets**.
-* **Environment‑aware gating**: DEM slope, radar SNR, VIO inliers, SoOP DOP; the system decides what to trust.
-
----
-
-## 3) Hardware Snapshot (MVP BOM)
-
-| Subsystem              | MVP Choice                                                           | Notes                                      |
-| ---------------------- | -------------------------------------------------------------------- | ------------------------------------------ |
-| IMU                    | Industrial MEMS (e.g., 3–5 °/hr gyro bias, 0.05–0.1 m/s² accel bias) | 200 Hz, temp‑comp; rigid mount             |
-| mmWave Radar           | 77 GHz FMCW (automotive‑class)                                       | RO front‑end; robust to weather            |
-| Radar/Laser Altimeter  | 2–1500 m AGL                                                         | TRN scalar constraint                      |
-| Camera (Option A)      | Global‑shutter RGB or **event camera**                               | Event cam for HDR/high‑speed/night         |
-| Thermal Cam (Option B) | LWIR                                                                 | Thermal‑inertial odom in darkness/fog      |
-| LiDAR (Option C)       | 16–32 ch                                                             | Alternative to camera; good in low‑texture |
-| SoOP                   | LEO (e.g., STL dev), terrestrial beacon, or 5G positioning dev kit   | Absolute fixes, timing                     |
-| UWB (opt.)             | TDoA/Two‑way ranging                                                 | Cooperative constraints                    |
-| Clock                  | PPS/PTP; **CSAC** optional                                           | Timing holdover/spoof resistance           |
-| Compute                | Jetson Orin / x86 i7 + small GPU                                     | Fanless if airborne                        |
-
-**Mounting**: co‑locate IMU + radar + alt antenna + vision on a rigid plate; measure **lever arms** and **boresight** precisely; isolate vibration.
+* **Opportunistic fusion:** any subset of aids; each contributes with its **σ, DOP/SNR, validity**.
+* **Two-stage:** front-ends → robust factors → **graph**; **UKF** runs the tight loop and is reconciled to graph via **soft resets**.
+* **Environment-aware gating:** DEM slope, radar SNR, SoOP DOP, etc.
 
 ---
 
-## 4) Software Architecture
+## 3) Operational Modes (profiles)
 
-### 4.1 Processes & Threads
+* **AIR-TRN/RO-SoOP:** RO + TRN (radar-alt + DEM) as primary; SoOP fixes when present; vision optional.
+* **GROUND-RO-SoOP:** Automotive 77 GHz RO + SoOP/UWB; TRN disabled unless ralt present.
+* **MARITIME-RO-COAST-SoOP:** Marine radar odometry + coastline TRN (chart/shoreline) + SoOP; ralt off; vision optional.
 
-* **Sensor Drivers** (one thread each): timestamped pubs → lock‑free ring buffers.
-* **Front‑Ends** (RO, TRN, VIO/LO, SoOP, UWB): convert raw data → normalized measurement factors with covariance & quality flags.
-* **Fusion Core**:
-
-  * **SR‑UKF @200 Hz**: mechanization (strapdown), bias states, wind (optional), scale factors.
-  * **Fixed‑Lag Smoother @20–60 Hz**: factor graph (IMU preintegration, RO/VIO/LO factors, TRN pseudo‑range, SoOP ranges/timing).
-  * **Reconciliation @1–5 Hz**: apply graph posterior to UKF (**soft reset** on position/velocity/attitude/bias window).
-* **Integrity & Mode Manager**: χ²/NIS/NEES tests; environment classifiers (DEM slope, radar SNR, feature count, SoOP DOP); sensor fault isolation; mode switching (e.g., TRN‑only / RO‑SoOP).
-* **Logging/Telemetry**: binary log + JSON summaries; replay tool.
-
-### 4.2 State Vector (typical error‑state UKF)
-
-```
-x = [ p(3) v(3) q(4) b_g(3) b_a(3) s_a(3) wind(2) ... ]  (customizable)
-```
-
-* **Process model**: standard INS with coning/sculling comp; random‑walk biases; optional wind for small UAV.
-
-### 4.3 Measurement Models (high‑level)
-
-* **TRN (radar‑alt + DEM)**
-
-  * Residual: r = z_ralt − (z_NED − DEM(x,y))
-  * Jacobian: H = [−∂DEM/∂x, −∂DEM/∂y, +1] on position; gated by slope ≥ s_min & radar validity.
-* **Radar Odometry (RO)**
-
-  * Front‑end estimates Δpose_k,k+1 and cov via scan alignment (radar point cloud / power image).
-  * Factor ties consecutive poses; robust loss for outliers.
-* **VIO / Event / Thermal Odom**
-
-  * Preintegrated IMU + reprojection/photometric factors (or thermal gradient factors); outputs Δpose with cov.
-* **LiDAR Odom (LOAM‑style)**
-
-  * ICP/feature factors; helpful in texture‑poor daylight.
-* **SoOP**
-
-  * Ranging/Time transfer from LEO/terrestrial/5G; inject as pseudorange/time factors with per‑link σ & DOP.
-* **Cooperative UWB**
-
-  * Two‑way range/TDoA to peer nodes or beacons; factors added when available.
-* **Baro/Mag**
-
-  * Baro → altitude prior; Mag → yaw prior with robust loss (avoid over‑trust).
-
-### 4.4 Integrity Layer
-
-* Per‑factor χ² gating; rolling **NEES/NIS**; **consistency score** S∈[0,1].
-* **Voting & isolation**: down‑weight or exclude failing modalities; declare **degraded modes** with explicit flags.
-
-### 4.5 Timing & Time Sync
-
-* Hardware timestamps preferred; PTP discipline; PPS in; optional CSAC holdover.
+> Flat terrain/water? TRN auto-gates off by slope; stack leans on RO + SoOP/UWB and baro priors.
 
 ---
 
-## 5) Data Rates & Budgets
+## 4) Hardware Snapshot (MVP, available today)
 
-| Source            |      Rate | Latency Budget |      CPU | Notes               |
-| ----------------- | --------: | -------------: | -------: | ------------------- |
-| INS mechanization |    200 Hz |          <2 ms |      low | tight loop          |
-| Radar Odometry    |  10–20 Hz |         <50 ms |      med | GPU assist optional |
-| TRN               |   5–50 Hz |         <10 ms |      low | scalar update       |
-| VIO/Event         | 20–120 Hz |         <30 ms | med‑high | adapt rate to load  |
-| LiDAR Odom        |  10–20 Hz |         <70 ms |     high | optional            |
-| SoOP              |  0.1–2 Hz |        <500 ms |      low | absolute fixes      |
-| UWB               |   1–10 Hz |         <20 ms |      low | cooperative         |
+| Subsystem             | Example / Range                                           | Notes                                  |
+| --------------------- | --------------------------------------------------------- | -------------------------------------- |
+| **IMU**               | Industrial MEMS (3–5 °/hr gyro, 0.05–0.1 m/s² accel bias) | 200 Hz; rigid mount, temp-comp         |
+| **Radar (RO)**        | 77 GHz FMCW **or** X-band marine                          | Robust odometry in all weather         |
+| **Radar/Laser Alt**   | 2–1500 m AGL                                              | TRN scalar clamp over land             |
+| **SoOP/STN**          | LEO devkit, 5G OTDOA, terrestrial beacons, **UWB**        | Absolute fixes/TDOA; cooperative ready |
+| **Barometer/Magneto** | Weather-grade baro; low-bias mag                          | Baro altitude prior; mag yaw (robust)  |
+| **Clock**             | PPS/PTP; **CSAC** optional                                | Timing holdover/spoof resistance       |
+| **Compute**           | Jetson Orin NX **or** i7 NUC                              | Fanless if airborne                    |
+| **(Optional) Vision** | Event or thermal; **LiDAR** 16–32ch                       | Only when it helps                     |
 
-Memory target < 500 MB (MVP), CPU < 50% of Orin NX.
+> **R&D lane (future):** **Gravity-aided** navigation (tensor/gradiometry) as an add-on for **specialized platforms** (not required for MVP).
 
 ---
 
-## 6) Public APIs (PVT & Diagnostics)
+## 5) Software Architecture
 
-### 6.1 gRPC/ROS2 Messages (conceptual)
+* **Threads:** per-sensor drivers → lock-free queues; front-ends (RO/TRN/SoOP/UWB/Baro) → normalized factors; fusion core (UKF+graph); integrity/mode; logging.
+* **State (error-state UKF):** `x=[p v q b_g b_a s_a (clock_bias, clock_drift) (wind opt.)]`.
+* **Models:**
+
+  * **RO:** scan-to-scan Δpose + 6×6 cov (radar power image/point cloud alignment).
+  * **TRN:** residual `z_ralt − (z_NED − DEM(x,y))`, gated by **slope** and validity.
+  * **SoOP/STN:** TDOA/TOA pseudorange/time; **clock bias/drift** in state; RAIM-like checks.
+  * **Baro/Mag:** priors with robust losses.
+* **Integrity:** per-factor χ²; rolling **NEES/NIS**; **consistency score S∈[0,1]**; degraded modes explicit.
+
+---
+
+## 6) Data Rates & Budgets
+
+| Module            |     Rate | Latency Budget |      CPU | Notes              |
+| ----------------- | -------: | -------------: | -------: | ------------------ |
+| INS mechanization |   200 Hz |          <2 ms |      low | tight loop         |
+| Radar Odometry    | 10–20 Hz |         <50 ms |      med | GPU optional       |
+| TRN               |  5–50 Hz |         <10 ms |      low | scalar update      |
+| SoOP/UWB          | 0.1–2 Hz |        <500 ms |      low | absolute fixes     |
+| Baro/Mag          |  5–50 Hz |         <10 ms |     tiny | priors only        |
+| (opt) VIO/LO      | 20–60 Hz |      <30–70 ms | med-high | off unless helpful |
+
+**Targets:** <500 MB RAM (MVP), <50% Orin NX CPU at 15 Hz RO and 200 Hz INS.
+
+---
+
+## 7) Public Interfaces
+
+### 7.1 Outputs (conceptual)
 
 ```proto
 message NavSolution {
-  double time_s;            // UNIX epoch
-  double lat, lon, alt_msl; // or NED position from origin
-  double vn, ve, vd;        // m/s
-  quaternion q_ned_body;    // attitude
-  double cov[36];           // 6x6 upper‑tri; pos/vel cov
-  double integrity;         // 0..1
-  string mode;              // NOMINAL/TRN_ONLY/RO_SOOP/DEGRADED
-}
-
-message IntegrityReport {
-  double nees, nis;
-  double ro_inlier_rate;
-  double trn_inlier_rate;
-  double vio_inlier_rate;
-  double sop_fix_rate;
-  map<string,double> gates; // per‑modality χ² thresholds
+  double time_s;
+  double lat, lon, alt_msl;     // or NED relative to origin
+  double vn, ve, vd;
+  quaternion q_ned_body;
+  double cov[36];               // 6x6 upper-tri pos/vel
+  double integrity;             // 0..1
+  string mode;                  // NOMINAL / TRN_ONLY / RO_SOOP / DEGRADED / MARITIME
 }
 ```
 
-### 6.2 Configuration (YAML excerpt)
+### 7.2 Config (YAML excerpt)
 
 ```yaml
 common:
@@ -185,219 +139,147 @@ common:
 
 ukf:
   rate_hz: 200
+  include_clock_states: true
   proc_noise:
-    gyro_rw: 0.02     # (deg/s)/√Hz
-    acc_rw:  0.03     # m/s²/√Hz
-    bg_rw:   0.0005   # deg/s²/√Hz
-    ba_rw:   0.0005   # m/s³/√Hz
+    gyro_rw: 0.02
+    acc_rw:  0.03
+    bg_rw:   0.0005
+    ba_rw:   0.0005
+    clk_rw:  1.0e-9   # sec/√Hz (bias)
+    clkd_rw: 1.0e-11  # sec/s/√Hz (drift)
+
+radar_odom:
+  enabled: true
+  rate_hz: 15
+  robust_loss: huber
 
 trn:
+  enabled: true
   dem_path: data/dem/srtm
   min_slope_deg: 0.5
   chi2_gate_1d: 6.63
 
-radar_odom:
-  rate_hz: 15
-  robust_loss: huber
-  max_range_m: 120
+soop:
+  enabled: true
+  providers: [leo, terrestrial, 5g, uwb]
+  min_beacons: 4
+  sigma_tdoa_s: 2.0e-7
+  beacons_file: configs/stn/beacons.yaml
 
-vio:
-  type: event   # rgb|event|thermal
-  keyframe_dt: 0.5
-  outlier_chi2: 5.99
-
-sop:
-  providers: [leo, terrestrial, 5g]
-  min_fix_rate_hz: 0.2
-
-uwb:
-  enabled: false
+baro: { enabled: true, sigma_m: 2.0 }
+mag:  { enabled: true, sigma_deg: 5.0 }
 
 integrity:
   nees_window_s: 10
   nis_window_s: 10
-
-logging:
-  binlog_path: logs/run.bag
-  summary_json: logs/summary.json
 ```
 
 ---
 
-## 7) Build & Run (MVP)
+## 8) Build & Run
 
-### 7.1 Dependencies
-
-* C++20, CMake ≥3.22
-* **Eigen**, **Sophus**/**manif** (SO(3))
-* **GTSAM** (fixed‑lag smoother) or our minimal factor‑graph lib
-* **OpenCV** (VIO, even for event/thermal wrappers)
-* **yaml‑cpp**, **spdlog**, **abseil**
-* Optional: CUDA/cuDNN for radar/VIO acceleration
-
-### 7.2 Build
+**Deps:** C++20, CMake ≥3.22, Eigen, Sophus/manif, yaml-cpp, spdlog, abseil, (optional) GTSAM, OpenCV, CUDA.
 
 ```bash
 mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
+
+# Example: Air profile (TRN+RO, SoOP on)
+./aion_node --config configs/aion_air.yaml
+
+# Ground profile (RO+SoOP, no ralt)
+./aion_node --config configs/aion_ground.yaml
+
+# Maritime profile (marine RO + coastline TRN + SoOP)
+./aion_node --config configs/aion_maritime.yaml
 ```
 
-### 7.3 Run
+---
 
-```bash
-./aion_node \
-  --config configs/aion_telaviv.yaml \
-  --dem data/srtm/ \
-  --sop providers=leo,terrestrial
-```
+## 9) Calibration & Time
+
+* **Lever arms & boresight:** rigid plate; jig + plane/board procedures for radar/camera/LiDAR; store in YAML.
+* **IMU:** 6-face static + gentle motion; temp curves.
+* **RAlt:** set range gates; verify against DEM on a survey line.
+* **Time:** PPS/PTP preferred; log `t_meas` and `t_recv`; optional **CSAC** for holdover.
 
 ---
 
-## 8) Calibration & Time Sync
+## 10) Test Plan (first 90 days)
 
-* **Camera**: intrinsics (cal grid), extrinsics to IMU (Kalibr‑style).
-* **LiDAR/Radar**: boresight to IMU; plane/board procedures.
-* **IMU**: 6‑face static + gentle motion; record temp curves.
-* **Lever Arms**: tape + alignment jig; verify in flight (residual minimization).
-* **Time**: hardware trigger lines where possible; otherwise PTP with known bounds.
+**A. Ground (Weeks 1–3)** — Roof rig; day/night/rain. Deliver **RO+INS drift <1%/km** and stable integrity.
+**B. TRN (Weeks 4–6)** — Add ralt; mixed terrain loops; **CEP90 25–40 m** over hills; auto-gate on flats.
+**C. SoOP (Weeks 7–9)** — Integrate one LEO/5G/terrestrial source + UWB option; validate DOP & **soft-reset** behavior.
+**D. Air/Maritime (Weeks 10–12)** — Small UAS at 300–1000 m AGL (25–40 m/s) and/or coastal vessel runs; **≤50 m CEP90** on 30–40 min legs.
 
----
-
-## 9) Test Plan (First 90 Days)
-
-**Phase A — Ground (Weeks 1–3)**
-
-* Mount dev rig on car roof. Night/rain runs. Deliver **RO+INS** with <1% drift/km.
-
-**Phase B — TRN (Weeks 4–6)**
-
-* Add radar‑alt; enable TRN. Mixed terrain loops. Show **CEP90 <25–40 m** on rolling terrain segments.
-
-**Phase C — SoOP (Weeks 7–9)**
-
-* Integrate one SoOP provider. Validate absolute fixes rate/DOP. Sync graph + UKF soft‑resets.
-
-**Phase D — Air (Weeks 10–12)**
-
-* Lightweight aircraft/UAS at 300–1000 m AGL, 25–40 m/s. Enable event‑VIO or LiDAR‑odom. Demonstrate **≤50 m CEP90** over 30–40 min.
-
-**KPIs** (logged every second)
-
-* CEP50/CEP90; TRN inlier % vs DEM slope; RO drift %; VIO inlier count; SoOP fix rate; NEES/NIS pass%; integrity score S.
+**KPIs (1 Hz log):** CEP50/CEP90, RO drift %, TRN inliers vs slope, SoOP fix rate/DOP, NEES/NIS pass %, integrity S, mode histogram.
 
 ---
 
-## 10) Failure Modes & Degraded Ops
+## 11) Failure Modes & Degraded Ops
 
-* **Flat terrain / water** → TRN weak: rely on RO + SoOP; increase VIO keyframe density if any texture.
-* **Soot/smoke/night** → switch to thermal/event; down‑weight RGB.
-* **SoOP dropouts** → INS+RO+TRN holdover; increase covariance; expose **DEGRADED** mode to autopilot.
-* **Radar speckle/ghosts** → robust loss; velocity/ego‑motion checks; temporary gate.
-
----
-
-## 11) Security & Safety
-
-* **Integrity flags** are first‑class outputs (user must honor them).
-* **Logs** are for incident replay & certification evidence.
-* **Spoof resistance**: multi‑modality cross‑checks; SoOP from diverse providers; optional CSAC timing.
-* **Airworthiness path**: begin as **Advisory Nav**; later DO‑178C/DO‑254 increments.
+* **Flat terrain/water:** TRN off → rely on RO + SoOP/UWB + baro prior.
+* **Smoke/night/fog:** vision off; radar unchanged.
+* **SoOP dropouts:** INS+RO holdover; inflate cov; flag **DEGRADED**; resume when DOP improves.
+* **Radar ghosts/speckle:** robust loss + ego-motion sanity checks; temporary gating.
 
 ---
 
-## 12) Repository Layout (proposed)
+## 12) Security, Safety, Compliance
+
+* **Integrity first:** consumers must honor **integrity** and **mode** flags for autonomy gates.
+* **Logging:** binary + JSON summaries for incident replay/cert evidence.
+* **Anti-spoof posture:** cross-check modalities; diverse SoOP providers; CSAC time hardening.
+* **Certification path:** start as **Advisory Nav**; staged DO-178C/DO-254 plan; partitioned compute is possible.
+
+---
+
+## 13) Repo Layout
 
 ```
 aion/
-├── apps/
-│   └── aion_node.cpp
-├── configs/
-│   └── aion_telaviv.yaml
-├── core/
-│   ├── fusion/           # SR‑UKF, state, process model
-│   ├── graph/            # fixed‑lag smoother, factors
-│   ├── integrity/        # gating, NEES/NIS, mode mgr
-│   └── utils/            # time, math, logging
-├── frontends/
-│   ├── radar_odom/
-│   ├── trn/
-│   ├── vio_event/
-│   ├── lidar_odom/
-│   ├── sop/
-│   └── uwb/
-├── sensors/
-│   ├── imu/
-│   ├── radar/
-│   ├── ralt/
-│   ├── camera/
-│   ├── lidar/
-│   └── baro_mag/
-├── msgs/                 # ROS2/gRPC protos
-├── scripts/              # calib, dataset tools
-├── tests/                # unit + scenario tests
-└── docs/
-    └── design/*.md
-```
-
----
-
-## 13) Minimal Interfaces (C++ headers, conceptual)
-
-```cpp
-// frontends/trn/trn_update.h
-struct TrnMeas {
-  double alt_agl;                // radar alt
-  double dem_h;                  // DEM height at (x,y)
-  Eigen::Vector2d dem_grad;      // dDEM/dx, dDEM/dy
-  double sigma_alt;              // m
-  double slope_deg;              // for gating
-};
-
-class TrnUpdate {
- public:
-  bool apply(const TrnMeas& z, State& x, Cov& P);
-};
-```
-
-```cpp
-// frontends/radar_odom/ro_factor.h
-struct RoDelta { Eigen::Vector3d dpos; Eigen::Quaterniond dquat; Eigen::Matrix<double,6,6> cov; double dt; };
-```
-
-```cpp
-// core/graph/fixed_lag_smoother.h
-class FixedLagSmoother {
- public:
-  void addImu(const ImuPacket&);
-  void addRo(const RoDelta&);
-  void addVio(const VioDelta&);
-  void addTrn(const TrnMeas&);
-  void addSoop(const SoopMeas&);
-  PoseVelBias optimize(double t_now);
-};
+├── apps/aion_node.cpp
+├── configs/ (air|ground|maritime).yaml, stn/beacons.yaml
+├── core/    fusion/ graph/ integrity/ utils/
+├── frontends/ radar_odom/ trn/ soop/ uwb/ (vio_event/ lidar_odom optional)
+├── sensors/  imu/ radar/ ralt/ baro_mag/ (camera/ lidar optional)
+├── msgs/     (gRPC/ROS2)
+├── tools/    replay/ metrics/
+├── tests/    unit + scenario
+└── docs/     design/*.md
 ```
 
 ---
 
 ## 14) Roadmap (12 months)
 
-* **Q1**: MVP flight demos; closed‑loop with small autopilots (PX4 OFFBOARD advisory).
-* **Q2**: Starlink‑passive R&D path; 5G OTDOA adapter; mining/ports pilots with beacons.
-* **Q3**: Certification strategy, redundancy HW; maritime & desert modes.
-* **Q4**: Production hardware spin; SDK for integrators; initial sales.
+* **Q1:** Field demos (air/ground/maritime), investor pilots, integrator SDK.
+* **Q2:** More SoOP providers (5G OTDOA, terrestrial beacons), UWB mesh; desert & urban canyons.
+* **Q3:** Redundant HW, maritime-specific coastline TRN, mining/ports deployments.
+* **Q4:** Production HW spin, certification artifacts, first contracts.
 
 ---
 
 ## 15) Glossary
 
-* **TRN**: Terrain‑Referenced Navigation (DEM + AGL constraints).
-* **SoOP**: Signals of Opportunity (LEO/terrestrial/5G not GNSS).
-* **SR‑UKF**: Square‑Root Unscented Kalman Filter.
-* **NEES/NIS**: Estimator consistency statistics.
+* **TRN:** Terrain-Referenced Navigation (DEM + AGL).
+* **SoOP/STN:** Signals of Opportunity / terrestrial timing-ranging (LEO/5G/UWB).
+* **SR-UKF:** Square-Root Unscented Kalman Filter.
+* **NEES/NIS:** Estimator consistency metrics.
 
 ---
 
-## License & Credits
+## License
 
-© AION Navigation. All rights reserved. Third‑party libraries retain their licenses.
+© AION Navigation. Third-party components retain their licenses.
+
+---
+
+### Notes on Gravity (R&D)
+
+Gravity-aided (including **gradiometry**) is compelling for **long-range** and **feature-poor** regions, but the **sensor availability, size/power, and calibration burden** put it outside the MVP. We keep a clean measurement interface so a gravity factor (map-matching or gradients) can drop into the graph later without touching the rest of the stack.
+
+---
+
+If you want, I can also generate **profile configs** (`aion_air.yaml`, `aion_ground.yaml`, `aion_maritime.yaml`) and a sample `configs/stn/beacons.yaml` you can commit immediately.

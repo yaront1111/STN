@@ -1,0 +1,65 @@
+# AION Air Configuration - TRN Only
+# GPS-denied navigation for drones using Terrain-Referenced Navigation
+# Target: CEP90 ≤ 50m over hilly/coastal regions
+
+common:
+  frame: NED
+  origin:
+    lat_deg: 31.7683     # Jerusalem
+    lon_deg: 35.2137
+    alt_m: 750.0          # MSL altitude
+  gravity_model: wgs84
+
+ukf:
+  rate_hz: 200
+  include_wind_states: false
+  proc_noise:
+    gyro_rw: 0.02         # (deg/s)/√Hz
+    acc_rw: 0.03          # m/s²/√Hz
+    bg_rw: 0.0005         # (deg/s²)/√Hz
+    ba_rw: 0.0005         # m/s³/√Hz
+  measurement_gates:
+    nis_gate_1d: 15.0     # Chi-squared gate for scalar measurements
+    nis_gate_3d: 25.0     # Chi-squared gate for vector measurements
+
+trn:
+  enabled: true
+  update_rate_hz: 10
+  chi2_gate_1d: 9.0
+  min_slope_deg: 0.2      # Minimum terrain slope for informative updates
+  min_agl_m: 2.0
+  max_agl_m: 1500.0
+  dem_path: data/dem/srtm
+  dem_sigma_base_m: 5.0   # Base DEM uncertainty
+  dem_sigma_slope_k: 0.1  # Additional uncertainty per degree of slope
+  radar_sigma_m: 1.0      # Radar altimeter noise
+
+baro:
+  enabled: true
+  update_rate_hz: 50.0
+  sigma_m: 1.5
+  temp_comp_factor: 0.1
+  chi2_gate_1d: 9.0
+  max_innovation_m: 10.0
+  use_low_pass: true
+  filter_time_constant: 2.0
+  sea_level_pressure_pa: 101325.0
+
+magnetometer:
+  enabled: false          # Optional, only if well calibrated
+  update_rate_hz: 10.0
+  sigma_deg: 5.0
+  declination_deg: 4.5    # Jerusalem magnetic declination
+
+integrity:
+  enabled: true
+  nees_window_s: 10
+  nis_window_s: 10
+  consistency_threshold: 0.8
+  mode_hysteresis_s: 2.0
+
+logging:
+  level: info
+  file: logs/aion_air_trn.log
+  binlog_path: logs/aion_air_trn.bin
+  log_rate_hz: 10        # State logging rate
