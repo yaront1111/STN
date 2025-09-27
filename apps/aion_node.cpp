@@ -432,8 +432,15 @@ int main(int argc, char* argv[]) {
       const bool needs_correction = tilt_error_deg > 1.0;
 
       if (near_gravity && low_gyro && needs_correction) {
+        // Get tilt BEFORE update for proper Δtilt tracking
+        const auto state_before = ukf.getState();
+        const Eigen::Matrix3d R_nb_before = state_before.quaternion.toRotationMatrix();
+        const Eigen::Vector3d rpy_before = R_nb_before.eulerAngles(0, 1, 2);
+        const double tilt_before_deg = std::sqrt(rpy_before.x()*rpy_before.x() + rpy_before.y()*rpy_before.y()) * 180.0 / M_PI;
+
         // Normalize specific force to get gravity direction measurement
-        const Eigen::Vector3d z_measured = imu_data.acceleration.normalized();
+        // CRITICAL FIX: Negate to get "down" in body frame (gravity points down, accel measures up)
+        const Eigen::Vector3d z_measured = -imu_data.acceleration.normalized();
 
         // Adaptive noise based on gating conditions
         double gravity_sigma = 0.050;  // Base noise for cross-product residual (rad)
@@ -454,17 +461,19 @@ int main(int argc, char* argv[]) {
         // Apply measurement through UKF (integrates with δθ error states)
         ukf.update(gravity_meas);
 
-        // Calculate state-based tilt (quaternion roll/pitch magnitude)
-        const auto state = ukf.getState();
-        const Eigen::Matrix3d R_nb = state.quaternion.toRotationMatrix();
-        const Eigen::Vector3d rpy = R_nb.eulerAngles(0, 1, 2);  // roll, pitch, yaw
-        const double tilt_state_deg = std::sqrt(rpy.x()*rpy.x() + rpy.y()*rpy.y()) * 180.0 / M_PI;
-        const double tilt_diff_deg = std::abs(tilt_state_deg - tilt_error_deg);
+        // Get tilt AFTER update to measure actual correction
+        const auto state_after = ukf.getState();
+        const Eigen::Matrix3d R_nb_after = state_after.quaternion.toRotationMatrix();
+        const Eigen::Vector3d rpy_after = R_nb_after.eulerAngles(0, 1, 2);
+        const double tilt_after_deg = std::sqrt(rpy_after.x()*rpy_after.x() + rpy_after.y()*rpy_after.y()) * 180.0 / M_PI;
+
+        // Calculate ACTUAL change from update (should be negative when correcting)
+        const double tilt_delta_deg = tilt_after_deg - tilt_before_deg;
 
         last_gravity_time = imu_data.timestamp;
 
-        LOG_INFO("Gravity update: f_b_mag={:.2f}, tilt_accel={:.1f}°, tilt_state={:.1f}°, Δtilt={:.1f}°, gyro={:.4f}, sigma={:.3f}",
-                 f_b_mag, tilt_error_deg, tilt_state_deg, tilt_diff_deg, gyro_mag, gravity_sigma);
+        LOG_INFO("Gravity update: tilt {:.1f}°→{:.1f}° (Δ={:+.2f}°), accel_tilt={:.1f}°, f_mag={:.2f}, gyro={:.4f}, σ={:.3f}",
+                 tilt_before_deg, tilt_after_deg, tilt_delta_deg, tilt_error_deg, f_b_mag, gyro_mag, gravity_sigma);
       }
     }
 
@@ -707,7 +716,8 @@ int main(int argc, char* argv[]) {
               const bool gravity_conditions_good = (mag_error < 0.2 && gyro_mag < 0.05);
 
               if (gravity_conditions_good) {
-                const Eigen::Vector3d z_measured = imu_data.acceleration.normalized();
+                // CRITICAL FIX: Negate to get "down" in body frame
+                const Eigen::Vector3d z_measured = -imu_data.acceleration.normalized();
                 const double gravity_sigma = 0.050;  // Quick re-anchor noise
                 measurements::GravityUKFMeasurement gravity_reanchor(z_measured, gravity_sigma, current_time);
                 ukf.update(gravity_reanchor);
