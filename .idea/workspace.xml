@@ -5,13 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="a3d36c05-f365-4477-8ddd-f7e0cf9b5e25" name="Changes" comment="fixed code">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/apps/aion_node.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/apps/aion_node.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/configs/stn/beacons.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/configs/stn/beacons.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/measurements/gravity_ukf_measurement.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/measurements/gravity_ukf_measurement.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/measurements/trn_manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/measurements/trn_manager.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/measurements/trn_measurement.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/measurements/trn_measurement.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/measurements/trn_measurement.h" beforeDir="false" afterPath="$PROJECT_DIR$/measurements/trn_measurement.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -89,7 +83,7 @@
       <workItem from="1755380588768" duration="64669000" />
       <workItem from="1757009823873" duration="65185000" />
       <workItem from="1758358014674" duration="199000" />
-      <workItem from="1758358525336" duration="166168000" />
+      <workItem from="1758358525336" duration="166502000" />
     </task>
     <task id="LOCAL-00001" summary="test">
       <option name="closed" value="true" />
@@ -395,7 +389,15 @@
       <option name="project" value="LOCAL" />
       <updated>1758957247884</updated>
     </task>
-    <option name="localTasksCounter" value="39" />
+    <task id="LOCAL-00039" summary="fixed code">
+      <option name="closed" value="true" />
+      <created>1760269885957</created>
+      <option name="number" value="00039" />
+      <option name="presentableId" value="LOCAL-00039" />
+      <option name="project" value="LOCAL" />
+      <updated>1760269885957</updated>
+    </task>
+    <option name="localTasksCounter" value="40" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
