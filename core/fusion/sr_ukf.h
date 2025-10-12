@@ -59,6 +59,10 @@ struct SRUKFConfig {
   double accel_bias_noise_density  = 5.0e-4; // m/s^3/√Hz
   double wind_noise_density        = 1.0e-1; // m/s^2/√Hz
 
+  // NEW: Velocity random walk (fixes covariance collapse)
+  double horiz_vel_noise_density   = 2.0e-2; // m/s/√Hz (2 cm/s per second)
+  double vert_vel_noise_density    = 1.5e-2; // m/s/√Hz (1.5 cm/s per second)
+
   // Gravity magnitude [m/s^2] (NED +down)
   double gravity = 9.80665;
 

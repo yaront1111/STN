@@ -188,8 +188,14 @@ void SRUKF::addProcessNoise(double dt) {
   const double ba_rw = config_.accel_bias_noise_density;
   const double w_rw  = config_.wind_noise_density;
 
+  // NEW: Velocity random walk (fixes covariance collapse)
+  const double vh_rw = config_.horiz_vel_noise_density;
+  const double vv_rw = config_.vert_vel_noise_density;
+
   const double q_p  = 0.25 * a_rw * a_rw * dt * dt; // tiny position diffusion
-  const double q_v  = a_rw * a_rw * dt;             // velocity RW
+  const double q_v  = a_rw * a_rw * dt;             // velocity RW from accel noise
+  const double q_vh = vh_rw * vh_rw * dt;           // NEW: horizontal velocity RW
+  const double q_vv = vv_rw * vv_rw * dt;           // NEW: vertical velocity RW
   const double q_th = g_rw * g_rw * dt;             // attitude RW
   const double q_bg = bg_rw * bg_rw * dt;           // gyro bias RW
   const double q_ba = ba_rw * ba_rw * dt;           // accel bias RW
@@ -198,6 +204,12 @@ void SRUKF::addProcessNoise(double dt) {
   // pos (0:2), vel (3:5), att (6:8), bg (9:11), ba (12:14), wind (15:16)
   P.block<3,3>(0,0).diagonal().array()   += q_p;
   P.block<3,3>(3,3).diagonal().array()   += q_v;
+
+  // NEW: Add velocity random walk to fix covariance collapse
+  P(3,3) += q_vh;  // North velocity
+  P(4,4) += q_vh;  // East velocity
+  P(5,5) += q_vv;  // Down velocity
+
   P.block<3,3>(6,6).diagonal().array()   += q_th;
   P.block<3,3>(9,9).diagonal().array()   += q_bg;
   P.block<3,3>(12,12).diagonal().array() += q_ba;

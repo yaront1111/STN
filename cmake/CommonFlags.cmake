@@ -1,31 +1,42 @@
 # Common compiler flags and options for AION project
 
 # Compiler warnings
-add_compile_options(
-  -Wall
-  -Wextra
-  -Wpedantic
-  -Wcast-align
-  -Wcast-qual
-  -Wconversion
-  -Wformat=2
-  -Wnull-dereference
-  -Wold-style-cast
-  -Woverloaded-virtual
-  -Wshadow
-  -Wsign-conversion
-  -Wunused
-  -Wno-unknown-pragmas
-  $<$<CXX_COMPILER_ID:GNU>:-Wlogical-op>
-  $<$<CXX_COMPILER_ID:GNU>:-Wuseless-cast>
-  $<$<CXX_COMPILER_ID:Clang>:-Wno-gnu-zero-variadic-macro-arguments>
-)
+if(MSVC)
+  add_compile_options(/W4 /permissive- /WX-)
+else()
+  add_compile_options(
+    -Wall
+    -Wextra
+    -Wpedantic
+    -Wcast-align
+    -Wcast-qual
+    -Wconversion
+    -Wformat=2
+    -Wnull-dereference
+    -Wold-style-cast
+    -Woverloaded-virtual
+    -Wshadow
+    -Wsign-conversion
+    -Wunused
+    -Wno-unknown-pragmas
+    $<$<CXX_COMPILER_ID:GNU>:-Wlogical-op>
+    $<$<CXX_COMPILER_ID:GNU>:-Wuseless-cast>
+    $<$<CXX_COMPILER_ID:Clang>:-Wno-gnu-zero-variadic-macro-arguments>
+  )
+endif()
 
 # Build type specific flags
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -DDEBUG -DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG")
-set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
+if(MSVC)
+  set(CMAKE_CXX_FLAGS_DEBUG "/Od /Zi /DDEBUG /DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG")
+  set(CMAKE_CXX_FLAGS_RELEASE "/O2 /DNDEBUG")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Zi /DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG")
+  set(CMAKE_CXX_FLAGS_MINSIZEREL "/O1 /DNDEBUG")
+else()
+  set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -DDEBUG -DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG")
+  set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG")
+  set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -DNDEBUG")
+endif()
 
 # Architecture optimizations for Release builds
 if(CMAKE_BUILD_TYPE STREQUAL "Release")

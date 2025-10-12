@@ -166,10 +166,10 @@ int main(int argc, char* argv[]) {
   measurements::BaroConfig baro_config;
   baro_config.enabled              = true;
   baro_config.update_rate_hz       = 50.0;
-  baro_config.sigma_m              = 1.5;  // Normalized post-convergence
+  baro_config.sigma_m              = 2.0;  // Increased from 1.5 (more realistic)
   baro_config.temp_comp_factor_m_per_C = 0.1;
-  baro_config.chi2_gate_1d         = 9.0;   // Tightened post-convergence
-  baro_config.max_innovation_m     = 25.0;  // Reasonable range for operation
+  baro_config.chi2_gate_1d         = 9.0;   // Keep at 9.0 (correct 3-sigma gate)
+  baro_config.max_innovation_m     = 50.0;  // Increased from 25.0
   baro_config.use_low_pass         = true;
   baro_config.filter_time_constant = 1.5;  // Faster response
   baro_config.sea_level_pressure_pa= 101325.0;
@@ -183,12 +183,12 @@ int main(int argc, char* argv[]) {
   measurements::TRNManagerConfig trn_config;
   trn_config.enabled            = true;
   trn_config.update_rate_hz     = 10.0;                    // radar at 10 Hz
-  trn_config.chi2_gate_1d       = 12.0;                    // Optimized for performance
-  trn_config.min_slope_deg      = 0.8;                     // informative terrain threshold
+  trn_config.chi2_gate_1d       = 9.21;                    // 99.9% confidence (was 12.0)
+  trn_config.min_slope_deg      = 0.5;                     // Relaxed from 0.8 (accept more terrain)
   trn_config.min_agl_m          = 2.0;                     // m
   trn_config.max_agl_m          = 1500.0;                  // m
   trn_config.dem_sigma_base_m   = 5.0;                     // DEM uncertainty base
-  trn_config.dem_sigma_slope_k  = 0.1;                     // DEM uncertainty slope factor
+  trn_config.dem_sigma_slope_k  = 0.15;                    // Increased from 0.1
   trn_config.radar_sigma_m      = 1.0;                     // radar σ [m]
   // Use SystemConfig origin for consistent frame
   trn_config.origin_lat_deg     = sys_config.origin.lat;   // Tel Aviv from SystemConfig
@@ -777,6 +777,11 @@ int main(int argc, char* argv[]) {
 
       LOG_INFO("Position Error: Total={:.2f}m (H={:.2f}m, V={:.2f}m), RMS={:.2f}m, Max={:.2f}m",
                position_error_norm, horiz_error, vert_error, rms_error, max_position_error);
+
+      // NEW: Log covariance diagonal to monitor growth
+      const auto& P = ukf.getCovariance();
+      LOG_INFO("Covariance: P_xx={:.2f}, P_yy={:.2f}, P_zz={:.2f} m²",
+               P(0,0), P(1,1), P(2,2));
 
       if (trn_config.enabled) {
         const auto& trn_stats = trn_manager.stats();
