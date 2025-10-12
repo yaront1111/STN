@@ -131,13 +131,21 @@ double TRNManager::simulateAGLFromState(const State& s) {
   // DEM (bilinear; fallback handled inside TerrainService)
   double elev = terrain_service_->getElevationBilinear(lat, lon);
   if (elev == -32768.0) elev = terrain_service_->getElevation(lat, lon);
-  if (elev == -32768.0) elev = 0.0; // sea level fallback
+  if (elev == -32768.0) {
+    elev = 0.0; // sea level fallback
+    spdlog::debug("TRN: Using sea level fallback for elevation at ({:.5f},{:.5f})", lat, lon);
+  }
 
   // MSL altitude: origin_alt - z_down (NED)
   const double msl = cfg_.origin_alt_m - s.position.z();
   const double true_agl = msl - elev;
+  const double noise = radar_noise_(rng_);
+  const double simulated = true_agl + noise;
 
-  return true_agl + radar_noise_(rng_);
+  spdlog::debug("TRN simulateAGL: pos=({:.1f},{:.1f},{:.1f}) lat={:.5f} lon={:.5f} elev={:.1f}m MSL={:.1f}m AGL={:.1f}m noise={:.2f} => {:.1f}m",
+               s.position.x(), s.position.y(), s.position.z(), lat, lon, elev, msl, true_agl, noise, simulated);
+
+  return simulated;
 }
 
 void TRNManager::resetStats() {

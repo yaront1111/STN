@@ -6,12 +6,12 @@
   <component name="ChangeListManager">
     <list default="true" id="a3d36c05-f365-4477-8ddd-f7e0cf9b5e25" name="Changes" comment="fixed code">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.MD" beforeDir="false" afterPath="$PROJECT_DIR$/README.MD" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/apps/aion_node.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/apps/aion_node.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/code-steps.md" beforeDir="false" afterPath="$PROJECT_DIR$/code-steps.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/measurements/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/measurements/CMakeLists.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/measurements/trn_ukf_measurement.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/measurements/trn_ukf_measurement.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tools/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/tools/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/configs/stn/beacons.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/configs/stn/beacons.yaml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/measurements/gravity_ukf_measurement.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/measurements/gravity_ukf_measurement.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/measurements/trn_manager.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/measurements/trn_manager.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/measurements/trn_measurement.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/measurements/trn_measurement.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/measurements/trn_measurement.h" beforeDir="false" afterPath="$PROJECT_DIR$/measurements/trn_measurement.h" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -89,7 +89,7 @@
       <workItem from="1755380588768" duration="64669000" />
       <workItem from="1757009823873" duration="65185000" />
       <workItem from="1758358014674" duration="199000" />
-      <workItem from="1758358525336" duration="157844000" />
+      <workItem from="1758358525336" duration="166168000" />
     </task>
     <task id="LOCAL-00001" summary="test">
       <option name="closed" value="true" />
