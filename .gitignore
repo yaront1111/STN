@@ -22,28 +22,6 @@ out/
 *.dll
 *.exe
 
-# Debug files
-*.dSYM/
-*.pdb
-core
-vgcore.*
-
-# Logs and data
-logs/
-*.log
-*.bag
-*.bag2
-*.raw
-*.bin
-
-# Generated files
-compile_commands.json
-*.pb.h
-*.pb.cc
-*_pb2.py
-*.grpc.pb.h
-*.grpc.pb.cc
-
 # Python
 __pycache__/
 *.py[cod]
