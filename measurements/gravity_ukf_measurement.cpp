@@ -24,8 +24,9 @@ Eigen::VectorXd GravityUKFMeasurement::predict(const aion::State& state) const {
     // Expected gravity vector in navigation frame (pointing down)
     const Eigen::Vector3d e3(0.0, 0.0, 1.0);  // [0, 0, 1] down in NED
 
-    // Expected gravity direction in body frame (specific force points opposite to gravity)
-    Eigen::Vector3d h = -(R_bn * e3);  // body-frame unit vector
+    // Expected gravity direction in body frame
+    // At rest: specific force = -R_bn * g_n, so normalized specific force = R_bn * e3
+    Eigen::Vector3d h = R_bn * e3;  // body-frame unit vector (no negation!)
     h.normalize();
 
     // Measured specific force direction (normalized)

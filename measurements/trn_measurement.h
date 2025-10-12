@@ -91,7 +91,8 @@ class TRNProcessor {
 public:
   TRNProcessor(std::shared_ptr<terrain::TerrainService> terrain,
                const TRNConfig& cfg)
-  : terrain_(std::move(terrain)), cfg_(cfg) {}
+  : terrain_(std::move(terrain)), cfg_(cfg),
+    min_slope_tangent_(std::tan(cfg.min_slope_deg * M_PI / 180.0)) {}
 
   // Returns a ready-to-use measurement or null if rejected by gates.
   std::unique_ptr<aion::MeasurementBase>
@@ -100,9 +101,9 @@ public:
 
 private:
   // Helpers
-  static inline double metersPerDegLat() { return 111111.0; }
+  static inline double metersPerDegLat() { return 111132.92; }
   static inline double metersPerDegLon(double lat_deg) {
-    return 111111.0 * std::cos(lat_deg * M_PI / 180.0);
+    return 111412.84 * std::cos(lat_deg * M_PI / 180.0);
   }
 
   // Convert local NED to lat/lon using fixed-scale approximation at origin
@@ -116,6 +117,7 @@ private:
 private:
   std::shared_ptr<terrain::TerrainService> terrain_;
   TRNConfig cfg_;
+  const double min_slope_tangent_;
 };
 
 } // namespace measurements

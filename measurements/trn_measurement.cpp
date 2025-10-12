@@ -51,13 +51,36 @@ TRNProcessor::makeMeasurement(const RadarAltimeterData& radar,
   }
   const double terrain_elev_m = *elev_opt;
 
-  // Terrain slope gate
-  const double slope_deg = terrain_ ? terrain_->getTerrainSlope(lat_deg, lon_deg) : 0.0;
-  if (slope_deg < cfg_.min_slope_deg) {
+  // Compute terrain slope using finite differences
+  double slope_tangent = 0.0;
+  if (terrain_) {
+    const double dlat = 0.0001;  // ~11m
+    const double dlon = 0.0001;  // ~9m at this latitude
+
+    auto elev_north = queryTerrainElevation(lat_deg + dlat, lon_deg);
+    auto elev_south = queryTerrainElevation(lat_deg - dlat, lon_deg);
+    auto elev_east = queryTerrainElevation(lat_deg, lon_deg + dlon);
+    auto elev_west = queryTerrainElevation(lat_deg, lon_deg - dlon);
+
+    if (elev_north && elev_south && elev_east && elev_west) {
+      const double dx_meters = 2.0 * dlon * metersPerDegLon(lat_deg);
+      const double dy_meters = 2.0 * dlat * metersPerDegLat();
+
+      double dz_dx = (*elev_east - *elev_west) / dx_meters;
+      double dz_dy = (*elev_north - *elev_south) / dy_meters;
+      slope_tangent = std::sqrt(dz_dx * dz_dx + dz_dy * dz_dy);
+    }
+  }
+
+  // Check slope threshold
+  if (slope_tangent < min_slope_tangent_) {
+    double slope_deg = std::atan(slope_tangent) * 180.0 / M_PI;
     spdlog::info("TRN: slope too flat: {:.2f}° < {:.2f}° at ({:.5f},{:.5f})",
                 slope_deg, cfg_.min_slope_deg, lat_deg, lon_deg);
     return nullptr;
   }
+
+  const double slope_deg = std::atan(slope_tangent) * 180.0 / M_PI;
 
   // Compose measurement noise (radar ⊕ DEM)
   const double radar_sigma = std::max(1e-3, radar.noise_std);
