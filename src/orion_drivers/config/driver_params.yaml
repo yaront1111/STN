@@ -1,0 +1,23 @@
+# ORION Driver Parameters
+
+/**:
+  ros__parameters:
+    # IMU Driver Parameters
+    imu:
+      imu_topic: "/imu/data"
+      health_topic: "/imu/health"
+      frame_id: "imu_link"
+      publish_rate: 400.0  # Hz
+
+    # LiDAR Driver Parameters
+    lidar:
+      lidar_topic: "/lidar/points"
+      health_topic: "/lidar/health"
+      frame_id: "lidar_link"
+      publish_rate: 10.0  # Hz
+
+    # Health Monitor Parameters
+    health_monitor:
+      sensors: ["imu", "lidar"]
+      diagnostics_topic: "/diagnostics"
+      publish_rate: 1.0  # Hz

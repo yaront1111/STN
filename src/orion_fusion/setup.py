@@ -1,0 +1,29 @@
+from setuptools import setup
+import os
+from glob import glob
+
+package_name = 'orion_fusion'
+
+setup(
+    name=package_name,
+    version='0.1.0',
+    packages=[package_name],
+    data_files=[
+        ('share/ament_index/resource_index/packages',
+            ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+    ],
+    install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='ORION Team',
+    maintainer_email='dev@orion-nav.com',
+    description='State estimation and fusion for ORION',
+    license='Proprietary',
+    tests_require=['pytest'],
+    entry_points={
+        'console_scripts': [
+            'confidence_estimator = orion_fusion.confidence_estimator:main',
+        ],
+    },
+)

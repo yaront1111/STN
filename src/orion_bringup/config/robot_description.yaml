@@ -1,0 +1,8 @@
+# Robot Description Configuration for ORION
+
+robot_state_publisher:
+  ros__parameters:
+    robot_description: ""  # Will be loaded from URDF file
+    publish_frequency: 50.0  # Hz
+    use_tf_static: true
+    ignore_timestamp: false
