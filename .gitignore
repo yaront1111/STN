@@ -1,78 +1,55 @@
-# Build directories
+# ROS2 / Colcon
 build/
-build-*/
-cmake-build-*/
-out/
-.build/
+install/
+log/
+*.pyc
+__pycache__/
 
-# IDE files
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-.DS_Store
-*.code-workspace
 
-# Compiled files
+# Rosbags
+*.bag
+*.db3
+*.mcap
+
+# Build artifacts
+*.so
 *.o
 *.a
-*.so
-*.dylib
-*.dll
-*.exe
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.Python
-*.egg-info/
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Documentation
-docs/_build/
-doxygen/
-
-# Data files (keep structure but not content)
-data/dem/**/*.dat
-data/dem/**/*.tif
-data/maps/**/*.dat
-!data/dem/.gitkeep
-!data/maps/.gitkeep
-
-# Calibration results
-configs/calibrations/*.yaml
-!configs/calibrations/example.yaml
-
-# Test outputs
-test_results/
-*.gcov
-*.gcda
-*.gcno
-
-# Package files
-*.deb
-*.rpm
-*.tar.gz
-*.zip
-
-# CUDA
-*.i
-*.ii
-*.gpu
-*.ptx
-*.cubin
-*.fatbin
+# Logs
+*.log
 
 # Temporary files
-.tmp/
-tmp/
-temp/
+*.tmp
+*.bak
 
-# OS specific
+# OS
+.DS_Store
 Thumbs.db
-.Spotlight-V100
-.Trashes
+
+# Data files (except DEM)
+/data/*
+!/data/dem/
+
+# Calibration data (may contain sensitive info)
+/config/sensors/*.yaml
+!/config/sensors/*.yaml.template
+
+# Test results
+test_results/
+*.test
+
+# Python virtual environments
+venv/
+env/
+*.egg-info/
+
+# Documentation build
+docs/_build/
+docs/.doctrees/
