@@ -9,6 +9,9 @@
 namespace chimera {
 namespace core {
 
+// Forward declaration
+class ThermalCompensation;
+
 /**
  * @brief Unscented Kalman Filter with SO(3) mechanization and square-root covariance
  *
@@ -49,8 +52,10 @@ class UKF {
    * @brief Constructor
    * @param noise UKF noise parameters
    * @param gravity_magnitude Gravity magnitude (default: 9.80665 m/s^2)
+   * @param thermal_lut_path Optional path to thermal calibration LUT (empty = no compensation)
    */
-  explicit UKF(const NoiseParams& noise, double gravity_magnitude = 9.80665);
+  explicit UKF(const NoiseParams& noise, double gravity_magnitude = 9.80665,
+               const std::string& thermal_lut_path = "");
 
   /**
    * @brief Initialize the filter with initial state
@@ -204,6 +209,9 @@ class UKF {
   // Weights for sigma points
   Eigen::Matrix<double, 31, 1> weights_mean_;
   Eigen::Matrix<double, 31, 1> weights_cov_;
+
+  // Thermal compensation
+  std::unique_ptr<ThermalCompensation> thermal_comp_;
 };
 
 }  // namespace core

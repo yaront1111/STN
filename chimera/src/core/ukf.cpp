@@ -1,4 +1,5 @@
 #include "core/ukf.h"
+#include "core/thermal_compensation.h"
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/geometry/SO3.h>
@@ -7,7 +8,8 @@
 namespace chimera {
 namespace core {
 
-UKF::UKF(const NoiseParams& noise, double gravity_magnitude)
+UKF::UKF(const NoiseParams& noise, double gravity_magnitude,
+         const std::string& thermal_lut_path)
     : velocity_(Eigen::Vector3d::Zero()),
       gyro_bias_(Eigen::Vector3d::Zero()),
       accel_bias_(Eigen::Vector3d::Zero()),
@@ -19,6 +21,8 @@ UKF::UKF(const NoiseParams& noise, double gravity_magnitude)
       alpha_(1e-3),
       beta_(2.0),
       kappa_(0.0) {
+  // Initialize thermal compensation
+  thermal_comp_ = std::make_unique<ThermalCompensation>(thermal_lut_path);
   // Error-state dimension
   constexpr int n = 15;
   lambda_ = alpha_ * alpha_ * (n + kappa_) - n;
@@ -307,9 +311,22 @@ void UKF::computeMeanAndCovariance(const Eigen::Matrix<double, 15, 31>& sigma_po
 
 std::pair<Eigen::Vector3d, Eigen::Vector3d> UKF::applyThermalCorrection(
     const Eigen::Vector3d& gyro_bias, const Eigen::Vector3d& accel_bias,
-    double /*temperature*/) const {
-  // Hook for LUT/polynomial bias vs temperature; pass-through for MVP
-  return {gyro_bias, accel_bias};
+    double temperature) const {
+  if (!thermal_comp_ || !thermal_comp_->isActive()) {
+    // No thermal compensation available, return biases unchanged
+    return {gyro_bias, accel_bias};
+  }
+
+  // Compute temperature-dependent bias prediction
+  Eigen::Vector3d thermal_gyro_bias = thermal_comp_->compensateGyroBias(temperature);
+  Eigen::Vector3d thermal_accel_bias = thermal_comp_->compensateAccelBias(temperature);
+
+  // Combine: Add thermal model prediction to estimated bias
+  // This compensates for temperature-induced drift
+  Eigen::Vector3d corrected_gyro_bias = gyro_bias + thermal_gyro_bias;
+  Eigen::Vector3d corrected_accel_bias = accel_bias + thermal_accel_bias;
+
+  return {corrected_gyro_bias, corrected_accel_bias};
 }
 
 }  // namespace core
