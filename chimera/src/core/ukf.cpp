@@ -42,6 +42,8 @@ UKF::UKF(const NoiseParams& noise, double gravity_magnitude,
   cov_sqrt_.setIdentity();
 }
 
+UKF::~UKF() = default;
+
 void UKF::initialize(const gtsam::Pose3& pose, const Eigen::Vector3d& velocity,
                      const Eigen::Matrix<double, 15, 15>& initial_cov) {
   pose_ = pose;

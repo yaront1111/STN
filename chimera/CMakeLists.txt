@@ -41,6 +41,8 @@ add_library(chimera_core STATIC
     src/core/ukf.cpp
     src/core/smoother_wrapper.cpp
     src/core/contract_monitor.cpp
+    src/core/thermal_compensation.cpp
+    src/core/flight_computer_stream.cpp
 
     # Factors (header-only with some .cpp implementations)
     src/factors/altimeter_range_factor.cpp

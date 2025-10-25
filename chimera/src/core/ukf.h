@@ -58,6 +58,11 @@ class UKF {
                const std::string& thermal_lut_path = "");
 
   /**
+   * @brief Destructor (required for std::unique_ptr with forward-declared types)
+   */
+  ~UKF();
+
+  /**
    * @brief Initialize the filter with initial state
    * @param pose Initial pose (position + orientation)
    * @param velocity Initial velocity in world frame
