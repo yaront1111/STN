@@ -1,0 +1,151 @@
+name: CHIMERA CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build and Test - ${{ matrix.os }} - ${{ matrix.build_type }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        build_type: [Release, Debug]
+        include:
+          - os: ubuntu-22.04
+            compiler_version: "11"
+          - os: ubuntu-24.04
+            compiler_version: "13"
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          libeigen3-dev \
+          libboost-all-dev \
+          libyaml-cpp-dev \
+          libgtest-dev \
+          wget
+
+    - name: Cache GTSAM
+      id: cache-gtsam
+      uses: actions/cache@v4
+      with:
+        path: /usr/local
+        key: ${{ runner.os }}-gtsam-4.2-${{ hashFiles('**/CMakeLists.txt') }}
+
+    - name: Build and install GTSAM
+      if: steps.cache-gtsam.outputs.cache-hit != 'true'
+      run: |
+        cd /tmp
+        wget https://github.com/borglab/gtsam/archive/refs/tags/4.2.tar.gz
+        tar -xzf 4.2.tar.gz
+        cd gtsam-4.2
+        mkdir build && cd build
+        cmake .. \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DGTSAM_BUILD_TESTS=OFF \
+          -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+          -DGTSAM_WITH_TBB=OFF \
+          -DGTSAM_BUILD_UNSTABLE=ON \
+          -DCMAKE_INSTALL_PREFIX=/usr/local
+        make -j$(nproc)
+        sudo make install
+        sudo ldconfig
+
+    - name: Configure CMake
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          -DCMAKE_CXX_COMPILER=g++-${{ matrix.compiler_version }}
+
+    - name: Build
+      run: cmake --build build --config ${{ matrix.build_type }} -j$(nproc)
+
+    - name: Run unit tests
+      run: |
+        cd build
+        ./chimera_tests --gtest_output=xml:test_results.xml
+
+    - name: Publish test results
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      if: always()
+      with:
+        files: build/test_results.xml
+
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          clang-format-14 \
+          cppcheck
+
+    - name: Run cppcheck
+      run: |
+        cppcheck --enable=warning,style,performance,portability \
+          --error-exitcode=1 \
+          --inline-suppr \
+          --suppress=unusedFunction \
+          --suppress=unmatchedSuppression \
+          src/ tests/ apps/ \
+          2>&1 | tee cppcheck_report.txt || true
+
+    - name: Check for critical issues
+      run: |
+        if grep -E "(error|warning)" cppcheck_report.txt | grep -v "unusedFunction\|unmatchedSuppression"; then
+          echo "Critical cppcheck issues found"
+          # Don't fail build for now, just warn
+        fi
+
+  documentation:
+    name: Documentation Check
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check for required documentation
+      run: |
+        # Check for essential docs
+        test -f README.md || (echo "Missing README.md" && exit 1)
+        test -f docs/commercialization/ROADMAP.md || (echo "Missing ROADMAP.md" && exit 1)
+        test -d docs || (echo "Missing docs directory" && exit 1)
+        echo "Documentation check passed"
+
+  build-summary:
+    name: Build Summary
+    runs-on: ubuntu-22.04
+    needs: [build-and-test, code-quality, documentation]
+    if: always()
+
+    steps:
+    - name: Check build status
+      run: |
+        echo "Build and test: ${{ needs.build-and-test.result }}"
+        echo "Code quality: ${{ needs.code-quality.result }}"
+        echo "Documentation: ${{ needs.documentation.result }}"
+
+        if [ "${{ needs.build-and-test.result }}" != "success" ]; then
+          echo "Build and test failed"
+          exit 1
+        fi

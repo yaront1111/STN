@@ -1,0 +1,351 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://chimera-nav.io/schemas/telemetry/v1.0.0",
+  "title": "CHIMERA Telemetry Schema",
+  "description": "Production telemetry output for CHIMERA GPS-denied navigation system",
+  "version": "1.0.0",
+  "type": "object",
+  "required": [
+    "t",
+    "pos",
+    "vel",
+    "agl_m",
+    "contract_ok",
+    "altitude_source",
+    "sensor_health",
+    "watchdog"
+  ],
+  "properties": {
+    "t": {
+      "type": "number",
+      "description": "Timestamp in seconds (synchronized monotonic time)",
+      "minimum": 0
+    },
+    "pos": {
+      "type": "array",
+      "description": "Position [x, y, z] in NED frame (meters)",
+      "items": {"type": "number"},
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "vel": {
+      "type": "array",
+      "description": "Velocity [vx, vy, vz] in NED frame (m/s)",
+      "items": {"type": "number"},
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "agl_m": {
+      "type": "number",
+      "description": "Altitude above ground level (meters, positive up)",
+      "minimum": 0
+    },
+    "z_eff_m": {
+      "type": "number",
+      "description": "Effective depth for optical flow (meters)"
+    },
+    "mag_updates": {
+      "type": "integer",
+      "description": "Total magnetometer updates processed",
+      "minimum": 0
+    },
+    "lidar_updates": {
+      "type": "integer",
+      "description": "Total LiDAR updates processed",
+      "minimum": 0
+    },
+    "baro_updates": {
+      "type": "integer",
+      "description": "Total barometer updates processed",
+      "minimum": 0
+    },
+    "airspeed_updates": {
+      "type": "integer",
+      "description": "Total airspeed updates processed",
+      "minimum": 0
+    },
+    "of_updates": {
+      "type": "integer",
+      "description": "Total optical flow updates processed",
+      "minimum": 0
+    },
+    "of_rays_used": {
+      "type": "integer",
+      "description": "Number of optical flow rays used in current update",
+      "minimum": 0
+    },
+    "of_rays_rejected": {
+      "type": "integer",
+      "description": "Number of optical flow rays rejected",
+      "minimum": 0
+    },
+    "of_rms_px": {
+      "type": "number",
+      "description": "Optical flow RMS residual (pixels)",
+      "minimum": 0
+    },
+    "of_health": {
+      "type": "string",
+      "description": "Optical flow health status",
+      "enum": ["healthy", "degraded", "bad"]
+    },
+    "wind": {
+      "type": "array",
+      "description": "Wind velocity estimate [wx, wy] in NED horizontal (m/s)",
+      "items": {"type": "number"},
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "gyro_bias_dps": {
+      "type": "number",
+      "description": "Gyroscope bias magnitude (degrees per second)",
+      "minimum": 0
+    },
+    "accel_bias_mps2": {
+      "type": "number",
+      "description": "Accelerometer bias magnitude (m/s^2)",
+      "minimum": 0
+    },
+    "graph_error_total": {
+      "type": "number",
+      "description": "Total factor graph error",
+      "minimum": 0
+    },
+    "graph_error_lidar_count": {
+      "type": "integer",
+      "description": "Number of LiDAR factors in graph",
+      "minimum": 0
+    },
+    "graph_error_lidar_total": {
+      "type": "number",
+      "description": "Total LiDAR factor error",
+      "minimum": 0
+    },
+    "ukf_cpu_ms": {
+      "type": "number",
+      "description": "UKF propagation CPU time (milliseconds)",
+      "minimum": 0
+    },
+    "smoother_cpu_ms": {
+      "type": "number",
+      "description": "Smoother optimization CPU time (milliseconds)",
+      "minimum": 0
+    },
+    "contract_ok": {
+      "type": "boolean",
+      "description": "Contract monitor status (true = all sensors available)"
+    },
+    "anchor": {
+      "type": "boolean",
+      "description": "Altitude reanchor applied this timestep"
+    },
+    "anchor_age_s": {
+      "type": "number",
+      "description": "Age of last altitude anchor (seconds)",
+      "minimum": 0
+    },
+    "lidar_healthy_streak": {
+      "type": "integer",
+      "description": "Consecutive LiDAR healthy measurements",
+      "minimum": 0
+    },
+    "of_bad_streak": {
+      "type": "integer",
+      "description": "Consecutive optical flow bad measurements",
+      "minimum": 0
+    },
+    "enable_airspeed": {
+      "type": "boolean",
+      "description": "Airspeed sensor enabled flag"
+    },
+    "vel_prior_added": {
+      "type": "boolean",
+      "description": "Velocity prior factor added to graph"
+    },
+    "of_depth_scale": {
+      "type": "number",
+      "description": "Optical flow depth scale factor",
+      "minimum": 0
+    },
+    "alt_src": {
+      "type": "string",
+      "description": "Altitude source (legacy field, use altitude_source instead)",
+      "enum": ["none", "lidar", "baro", "baro_takeover"]
+    },
+    "sensor_health": {
+      "type": "object",
+      "description": "Per-sensor health monitoring",
+      "required": ["lidar", "baro", "mag", "of", "imu"],
+      "properties": {
+        "lidar": {
+          "type": "object",
+          "required": ["score", "is_stuck", "noise_level", "reason"],
+          "properties": {
+            "score": {
+              "type": "number",
+              "description": "Health score [0.0-1.0]",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "is_stuck": {
+              "type": "boolean",
+              "description": "Stuck sensor detection (dual-gate)"
+            },
+            "noise_level": {
+              "type": "number",
+              "description": "Measurement noise level (meters)",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "description": "Health degradation reason (space-separated tags)"
+            }
+          }
+        },
+        "baro": {
+          "type": "object",
+          "required": ["score", "noise_level", "drift_rate", "rapid_change", "reason"],
+          "properties": {
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "noise_level": {
+              "type": "number",
+              "description": "Barometer noise level (meters)",
+              "minimum": 0
+            },
+            "drift_rate": {
+              "type": "number",
+              "description": "Drift rate (m/s)"
+            },
+            "rapid_change": {
+              "type": "boolean",
+              "description": "Rapid pressure change detected"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        },
+        "mag": {
+          "type": "object",
+          "required": ["score", "norm", "interference", "reason"],
+          "properties": {
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "norm": {
+              "type": "number",
+              "description": "Magnetic field norm (unit depends on sensor)",
+              "minimum": 0
+            },
+            "interference": {
+              "type": "boolean",
+              "description": "Magnetic interference detected"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        },
+        "of": {
+          "type": "object",
+          "required": ["score", "texture_quality", "saturated", "reason"],
+          "properties": {
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "texture_quality": {
+              "type": "number",
+              "description": "Image texture quality metric",
+              "minimum": 0
+            },
+            "saturated": {
+              "type": "boolean",
+              "description": "Image saturation detected"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        },
+        "imu": {
+          "type": "object",
+          "required": ["score", "temperature", "gyro_saturated", "accel_saturated", "reason"],
+          "properties": {
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "temperature": {
+              "type": "number",
+              "description": "IMU temperature (Celsius)"
+            },
+            "gyro_saturated": {
+              "type": "boolean",
+              "description": "Gyroscope saturation detected"
+            },
+            "accel_saturated": {
+              "type": "boolean",
+              "description": "Accelerometer saturation detected"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "altitude_source": {
+      "type": "string",
+      "description": "Current altitude source",
+      "enum": ["NONE", "LIDAR", "BARO", "BARO_TAKEOVER"]
+    },
+    "mode_transitions": {
+      "type": "integer",
+      "description": "Total altitude source mode transitions",
+      "minimum": 0
+    },
+    "watchdog": {
+      "type": "object",
+      "description": "Watchdog system health monitoring",
+      "required": ["all_healthy", "failure_count", "deadline_violations"],
+      "properties": {
+        "all_healthy": {
+          "type": "boolean",
+          "description": "All watchdog checks passed"
+        },
+        "failure_count": {
+          "type": "integer",
+          "description": "Total accumulated failures",
+          "minimum": 0
+        },
+        "deadline_violations": {
+          "type": "object",
+          "required": ["has_violations", "timed_out_sensors"],
+          "properties": {
+            "has_violations": {
+              "type": "boolean",
+              "description": "Deadline violations detected"
+            },
+            "timed_out_sensors": {
+              "type": "array",
+              "description": "List of sensors that timed out",
+              "items": {
+                "type": "string",
+                "enum": ["imu", "lidar", "baro", "mag", "optical_flow"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

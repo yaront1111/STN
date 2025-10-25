@@ -1,0 +1,152 @@
+# CHIMERA CI/CD Checklist
+# Machine-readable gates for automated enforcement
+
+version: "1.0.0"
+
+build:
+  platforms:
+    - name: ubuntu-22.04-gcc11-x86_64
+      required: true
+      compiler: gcc-11
+      arch: x86_64
+      gtsam_version: "4.2"
+      sanitizers: [ASAN, UBSAN]
+      
+    - name: ubuntu-24.04-gcc13-x86_64
+      required: true
+      compiler: gcc-13
+      arch: x86_64
+      gtsam_version: "4.2"
+      
+    - name: ubuntu-22.04-clang14-x86_64
+      required: true
+      compiler: clang-14
+      arch: x86_64
+      gtsam_version: "4.2"
+      sanitizers: [TSAN]
+      
+    - name: ubuntu-22.04-gcc11-aarch64
+      required: false
+      compiler: gcc-11-aarch64-linux-gnu
+      arch: aarch64
+      gtsam_version: "4.2"
+
+  warnings:
+    fail_on_warnings: true
+    flags: "-Wall -Wextra -Wpedantic -Werror"
+
+tests:
+  unit:
+    required: true
+    min_coverage: 80  # percent
+    timeout: 300  # seconds
+    paths:
+      - tests/cpp/test_orientation_boot.cpp
+      - tests/cpp/test_imu_units.cpp
+      - tests/cpp/test_utilities.cpp
+      - tests/cpp/test_data_loading.cpp
+      - tests/cpp/test_sensor_matching.cpp
+      - tests/cpp/test_unit_detection.cpp
+      - tests/cpp/test_depth_algorithms.cpp
+      
+  integration:
+    required: true
+    datasets:
+      - name: standard_flight
+        path: DATA/flight_all_sensors_complete.json
+        flow: DATA/optical_flow.json
+        expected_contract_ok: true
+        max_altitude_mae: 1.0  # meters
+        max_runtime_sec: 5.0
+        
+  sanitizers:
+    asan:
+      required: true
+      env:
+        ASAN_OPTIONS: "detect_leaks=1:check_initialization_order=1"
+    ubsan:
+      required: true
+    tsan:
+      required: false  # Optional (slower)
+
+static_analysis:
+  clang_tidy:
+    required: true
+    checks:
+      - modernize-*
+      - readability-*
+      - performance-*
+      - bugprone-*
+    exclude_patterns:
+      - "*/third_party/*"
+      - "*/build/*"
+
+performance:
+  benchmarks:
+    - name: ukf_propagate
+      max_latency_ms: 0.5
+      percentile: 95
+      
+    - name: smoother_update
+      max_latency_ms: 30.0
+      percentile: 95
+      
+    - name: full_flight_60s
+      max_cpu_percent: 25.0
+      max_memory_mb: 300
+
+acceptance:
+  metrics:
+    - name: altitude_mae_lidar
+      target: 0.5  # meters
+      operator: "le"  # <=
+      
+    - name: altitude_mae_baro
+      target: 2.0
+      operator: "le"
+      
+    - name: horizontal_drift_of
+      target: 1.0  # m/min
+      operator: "le"
+      
+    - name: lock_time
+      target: 3.0  # seconds
+      operator: "le"
+      
+    - name: recovery_time_keyframes
+      target: 2
+      operator: "le"
+      
+    - name: false_takeover_rate
+      target: 0.1  # per hour
+      operator: "le"
+      
+  datasets:
+    required_pass_rate: 100  # percent
+    scenarios:
+      - standard_flight
+      - low_altitude
+      - high_altitude
+      - low_texture
+
+deployment:
+  artifacts:
+    - name: chimera_node_multi
+      type: executable
+      sign: true
+      
+    - name: libchimera_core.a
+      type: library
+      sign: true
+      
+    - name: ros2_chimera_nav
+      type: package
+      sign: false  # ROS2 packages use colcon
+      
+  documentation:
+    required_files:
+      - README.md
+      - docs/commercialization/ROADMAP.md
+      - docs/commercialization/INTEGRATION.md
+      - docs/specs/CI_CHECKLIST.yaml
+      - docs/specs/telemetry_schema_v1.json

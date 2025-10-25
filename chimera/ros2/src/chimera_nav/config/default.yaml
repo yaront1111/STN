@@ -1,0 +1,60 @@
+# CHIMERA Navigation Node - Default Configuration
+
+chimera_nav:
+  ros__parameters:
+    # Publishing
+    publish_rate: 50.0  # Hz
+
+    # Frame IDs
+    frame_id_map: "map"
+    frame_id_odom: "odom"
+    frame_id_base: "base_link"
+    frame_id_imu: "imu_link"
+
+    # LiDAR parameters
+    lidar_min: 0.3  # meters
+    lidar_max: 50.0  # meters
+    lidar_sigma_validated: 0.05  # meters
+    lidar_sigma_coldstart: 0.2  # meters
+    lidar_stuck_eps: 0.01  # stddev threshold (10mm)
+    lidar_stuck_spread: 0.005  # range spread threshold (5mm)
+    lidar_stuck_window: 8  # samples
+
+    # Barometer parameters
+    baro_sigma: 1.5  # meters
+    baro_noise_thresh: 0.5  # meters stddev
+
+    # Magnetometer parameters
+    mag_sigma: 0.1  # radians
+    mag_gate_frac: 0.30  # ±30% norm gating
+
+    # Optical Flow parameters
+    of_sigma_px: 2.0  # pixels
+    of_texture_thresh: 50.0  # texture variance
+
+    # IMU parameters
+    imu_accel_noise: 0.01  # m/s^2
+    imu_gyro_noise: 0.001  # rad/s
+    imu_gyro_sat_thresh: 8.0  # rad/s
+    imu_accel_sat_thresh: 150.0  # m/s^2
+
+    # Mode switching
+    baro_takeover_thresh_m: 50.0  # meters divergence
+    health_score_thresh: 0.5  # minimum sensor health
+
+    # Watchdog
+    watchdog_enable: true
+    watchdog_deadline_imu: 0.05  # 50ms
+    watchdog_deadline_lidar: 0.3  # 300ms
+    watchdog_deadline_baro: 1.5  # 1.5s
+
+    # UKF parameters
+    ukf_accel_noise_density: 0.01
+    ukf_gyro_noise_density: 0.001
+    ukf_accel_random_walk: 0.0001
+    ukf_gyro_random_walk: 0.00001
+
+    # Smoother parameters
+    lag_seconds: 2.0
+    smoother_hz: 5.0
+    reanchor_period_s: 1.0

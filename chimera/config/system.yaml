@@ -1,0 +1,104 @@
+# CHIMERA Forever UAV Navigation System Configuration
+
+# Update rates (Hz)
+rates:
+  ukf_hz: 200              # UKF propagation rate (IMU-driven)
+  smoother_hz: 5           # Fixed-lag smoother nominal update rate
+  smoother_burst_hz: 10    # Burst rate during re-lock or contract breach risk
+  reanchor_period_s: 3.0   # Re-anchor UKF from smoother every N seconds
+
+# Runtime parameters
+runtime:
+  lag_seconds: 7.0         # Fixed-lag smoother window duration
+  log_path: "/logs/chimera.jsonl"
+  enable_telemetry: true
+
+# Sensor configurations
+sensors:
+  imu:
+    enabled: true
+    gyro_noise_density: 0.00016968  # rad/s/sqrt(Hz)
+    gyro_random_walk: 1.9393e-05    # rad/s^2/sqrt(Hz)
+    accel_noise_density: 0.002      # m/s^2/sqrt(Hz)
+    accel_random_walk: 0.003        # m/s^3/sqrt(Hz)
+    thermal_bias_correction: true   # Enable thermal bias model
+
+  baro:
+    enabled: true
+    sigma: 0.8               # Altitude measurement noise (meters)
+    outlier_threshold: 5.0   # Reject measurements > N sigma
+    median_filter_size: 5    # Outlier rejection window
+
+  mag:
+    enabled: true
+    yaw_sigma_deg: 6.0       # Heading measurement noise (degrees)
+    gate_chi2: 0.99          # Chi-squared gating threshold (99% confidence)
+    stability_window_s: 2.0  # Temporal stability check window
+    min_stability_count: 5   # Min samples for stability
+    enable_calibration: true # Soft/hard-iron calibration
+
+  tof:
+    enabled: true
+    sigma: 0.15              # Range measurement noise (meters)
+    min_range_m: 0.3         # Minimum valid range
+    max_range_m: 40.0        # Maximum valid range
+    outlier_threshold: 3.0   # Reject measurements > N sigma
+    median_filter_size: 7    # Outlier rejection window
+
+  camera:
+    enabled: true
+    of_hz: 80                # Optical flow processing rate
+    focal_length_px: 320.0   # Camera focal length (pixels)
+    height_nominal_m: 10.0   # Nominal flight height for scale estimation
+    min_features: 10         # Minimum features for valid OF
+    quality_threshold: 0.3   # Minimum quality score (0-1)
+    enable_ir_flood: true    # IR illumination for night ops
+    ir_auto_enable: true     # Auto-enable IR when quality drops
+
+  airspeed:
+    enabled: true
+    sigma: 0.5               # Airspeed measurement noise (m/s)
+    min_airspeed_mps: 2.0    # Minimum for validity
+    wind_estimation: false   # Enable wind state estimation (future)
+
+  uwb:
+    enabled: false           # Optional UWB ranging
+    sigma: 0.2               # Range measurement noise (meters)
+    rate_hz: 0.5             # Sparse beacon ping rate
+    max_range_m: 100.0       # Maximum UWB range
+
+# Integrity and robust loss
+integrity:
+  robust_loss: "huber"       # Options: none, huber, cauchy, tukey
+  huber_k: 1.5               # Huber loss threshold (in sigmas)
+  chi2_gate_threshold: 0.95  # Default chi-squared gating (95% confidence)
+  adaptive_weighting: true   # Reduce weight on repeated rejections
+  rejection_backoff_s: 5.0   # Back-off duration after rejections
+
+# Anchor Cadence Contract
+anchor_contract:
+  max_gap_s: 10.0            # Maximum gap between anchors (yaw, alt, v_b)
+  monitoring_window_s: 15.0  # Rolling window for gap tracking
+  breach_action: "burst"     # Action on imminent breach: burst, warn, halt
+
+# Zero-velocity update (ZUPT) for hover detection
+zupt:
+  enabled: true
+  velocity_threshold_mps: 0.15  # Max velocity for ZUPT trigger
+  angular_rate_threshold_degps: 2.0  # Max angular rate
+  duration_threshold_s: 0.5   # Duration to confirm hover
+  sigma: 0.01                 # ZUPT constraint sigma (very tight)
+
+# Initial state covariance
+initial_covariance:
+  position_sigma_m: 1.0
+  velocity_sigma_mps: 0.5
+  rotation_sigma_deg: 10.0
+  gyro_bias_sigma_radps: 0.01
+  accel_bias_sigma_mps2: 0.1
+
+# Debug and development
+debug:
+  verbose_logging: false
+  save_factor_graphs: false
+  save_frequency_hz: 1.0

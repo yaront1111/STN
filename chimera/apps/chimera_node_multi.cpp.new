@@ -1,0 +1,82 @@
+// CHIMERA - Multi-Sensor Real Flight Data Mode (Single-File Refactor)
+//
+// This is a self-contained refactor: config + loaders + helpers + FlightComputer + main().
+// Requires your existing CHIMERA/GTSAM headers/libs in include paths.
+//
+// Build example:
+//   g++ -std=c++17 chimera_node_multi_refactored.cpp -o chimera_node_multi \
+//       $(pkg-config --cflags --libs gtsam) -lboost_json
+//
+// Run example:
+//   ./chimera_node_multi --data DATA/flight_all_sensors_complete.json --flow DATA/optical_flow.json
+//
+// Notes:
+// - Keeps original logic: LiDAR stuck detection, OF gating/health, airspeed fallback, staged priors,
+//   Z-sign detection, periodic UKF re-anchor, telemetry.
+// - All tunables centralized in EstimatorConfig.
+// - Minor fixes/cleanups vs original (see comments).
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <deque>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <numeric>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include <Eigen/Dense>
+#include <boost/json.hpp>
+
+#include "chimera/core/contract_monitor.h"
+#include "chimera/core/smoother_wrapper.h"
+#include "chimera/core/ukf.h"
+
+#include "chimera/factors/aero_velocity_wind_factor.h"
+#include "chimera/factors/altimeter_range_factor.h"
+#include "chimera/factors/baro_factor.h"
+#include "chimera/factors/mag_yaw_factor.h"
+#include "chimera/factors/optical_flow_factor.h"
+#include "chimera/factors/velocity_magnitude_factor.h"
+
+#include "chimera/utils/telemetry.h"
+#include "chimera/utils/timing.h"
+
+#include <gtsam/geometry/Pose3.h>
+#include <gtsam/inference/Symbol.h>
+#include <gtsam/linear/NoiseModel.h>
+#include <gtsam/navigation/ImuBias.h>
+#include <gtsam/navigation/ImuFactor.h>
+#include <gtsam/navigation/PreintegrationParams.h>
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
+#include <gtsam/nonlinear/Values.h>
+#include <gtsam/slam/BetweenFactor.h>
+#include <gtsam/slam/PriorFactor.h>
+
+using gtsam::symbol_shorthand::X;  // Pose
+using gtsam::symbol_shorthand::V;  // Vel
+using gtsam::symbol_shorthand::B;  // Bias
+using gtsam::symbol_shorthand::W;  // Wind(2D)
+
+
+// Import Flight Computer from library
+#include "chimera/core/flight_computer.h"
+
+using chimera::core::FlightComputer;
+using chimera::core::ImuSample;
+using chimera::core::MagSample;
+using chimera::core::LidarSample;
+using chimera::core::BaroSample;
+using chimera::core::AirspeedSample;
+using chimera::core::OpticalFlowSample;
+using chimera::core::OpticalFlowRay;
+using chimera::core::SensorData;
+using chimera::core::EstimatorConfig;
+

@@ -1,0 +1,176 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CHIMERA Telemetry Schema v1",
+  "description": "Production telemetry format for CHIMERA GPS-denied navigation system",
+  "type": "object",
+  "required": [
+    "version",
+    "t",
+    "agl_m",
+    "alt_src",
+    "contract_ok",
+    "pos",
+    "vel"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version (semver)",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "default": "1.0.0"
+    },
+    "t": {
+      "type": "number",
+      "description": "Timestamp (seconds since start)"
+    },
+    "agl_m": {
+      "type": "number",
+      "description": "Altitude above ground level (meters)"
+    },
+    "alt_src": {
+      "type": "string",
+      "enum": ["none", "lidar", "baro", "baro_takeover"],
+      "description": "Active altitude source"
+    },
+    "pos": {
+      "type": "array",
+      "description": "Position [x, y, z_nav] in NED (meters)",
+      "items": {"type": "number"},
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "vel": {
+      "type": "array",
+      "description": "Velocity [vx, vy, vz] in NED (m/s)",
+      "items": {"type": "number"},
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "sensor_health": {
+      "type": "object",
+      "description": "Per-sensor health scores",
+      "properties": {
+        "lidar": {
+          "$ref": "#/definitions/sensorHealth",
+          "additionalProperties": {
+            "is_stuck": {"type": "boolean"},
+            "noise_level": {"type": "number"}
+          }
+        },
+        "baro": {
+          "$ref": "#/definitions/sensorHealth",
+          "additionalProperties": {
+            "drift_rate": {"type": "number"},
+            "noise_level": {"type": "number"}
+          }
+        },
+        "mag": {
+          "$ref": "#/definitions/sensorHealth",
+          "additionalProperties": {
+            "norm": {"type": "number"},
+            "interference": {"type": "boolean"}
+          }
+        },
+        "of": {
+          "$ref": "#/definitions/sensorHealth",
+          "additionalProperties": {
+            "texture_quality": {"type": "number"},
+            "saturated": {"type": "boolean"}
+          }
+        },
+        "imu": {
+          "$ref": "#/definitions/sensorHealth",
+          "additionalProperties": {
+            "temperature": {"type": "number"},
+            "gyro_saturated": {"type": "boolean"},
+            "accel_saturated": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "contract_ok": {
+      "type": "boolean",
+      "description": "Contract validation result"
+    },
+    "gyro_bias_dps": {
+      "type": "number",
+      "description": "Gyro bias magnitude (deg/s)"
+    },
+    "accel_bias_mps2": {
+      "type": "number",
+      "description": "Accel bias magnitude (m/s^2)"
+    },
+    "smoother_cpu_ms": {
+      "type": "number",
+      "description": "Smoother update CPU time (ms)"
+    },
+    "ukf_cpu_ms": {
+      "type": "number",
+      "description": "UKF propagate CPU time (ms)"
+    },
+    "graph_error_total": {
+      "type": "number",
+      "description": "Total factor graph error"
+    },
+    "of_rays_used": {
+      "type": "integer",
+      "description": "Number of optical flow rays used"
+    },
+    "of_rms_px": {
+      "type": "number",
+      "description": "Optical flow RMS residual (pixels/s)"
+    },
+    "mode_transitions": {
+      "type": "array",
+      "description": "Altitude source transition history",
+      "items": {
+        "type": "object",
+        "properties": {
+          "t": {"type": "number"},
+          "from": {"type": "string"},
+          "to": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "watchdogs": {
+      "type": "object",
+      "description": "Processing deadline monitoring",
+      "patternProperties": {
+        ".*": {
+          "type": "object",
+          "properties": {
+            "last_ms": {"type": "number"},
+            "max_ms": {"type": "number"},
+            "violations": {"type": "integer"}
+          }
+        }
+      }
+    },
+    "resource_usage": {
+      "type": "object",
+      "properties": {
+        "cpu_percent": {"type": "number"},
+        "memory_mb": {"type": "number"}
+      }
+    }
+  },
+  "definitions": {
+    "sensorHealth": {
+      "type": "object",
+      "required": ["score", "reason"],
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Health score [0,1]"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable health status"
+        }
+      }
+    }
+  }
+}
